@@ -1,0 +1,103 @@
+package tmux
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"tdev/internal/config"
+	"tdev/internal/protocol"
+)
+
+type Attachment struct {
+	SessionID  string `json:"session_id"`
+	Generation string `json:"generation"`
+	PID        int    `json:"pid"`
+	Attached   bool   `json:"attached"`
+}
+
+func (m Manager) attachmentPath(token string) (string, error) {
+	if !config.ValidName(token) {
+		return "", config.Invalid("invalid attachment token")
+	}
+	return filepath.Join(m.Store.Root, "runtime", "attachments", token+".json"), nil
+}
+func (m Manager) Attachment(ctx context.Context, p config.Project, token string) (Attachment, error) {
+	var a Attachment
+	path, err := m.attachmentPath(token)
+	if err != nil {
+		return a, err
+	}
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return a, nil
+	}
+	if err != nil {
+		return a, err
+	}
+	if err = json.Unmarshal(b, &a); err != nil {
+		return a, err
+	}
+	s, err := m.Require(ctx, p)
+	if err != nil {
+		return a, err
+	}
+	if a.SessionID != s.SessionID || a.Generation != s.Generation {
+		return a, protocol.Fail("SESSION_NOT_FOUND", 5, "original project session ended")
+	}
+	clients, err := m.run(ctx, "list-clients", "-t", s.SessionID, "-F", "#{client_pid}")
+	if err != nil {
+		return a, err
+	}
+	for _, pid := range strings.Split(clients, "\n") {
+		if pid == strconv.Itoa(a.PID) {
+			a.Attached = true
+		}
+	}
+	return a, nil
+}
+func (m Manager) Attach(ctx context.Context, p config.Project, session, generation, window, token string, in io.Reader, out, stderr io.Writer) error {
+	s, err := m.Require(ctx, p)
+	if err != nil {
+		return err
+	}
+	if s.SessionID != session || s.Generation != generation {
+		return protocol.Fail("SESSION_NOT_FOUND", 5, "original project session ended; refusing to attach a replacement")
+	}
+	path, err := m.attachmentPath(token)
+	if err != nil {
+		return err
+	}
+	args := []string{"attach-session", "-t", s.SessionID}
+	if window != "" {
+		if !strings.HasPrefix(window, "@") {
+			return config.Invalid("invalid window ID")
+		}
+		if _, err = strconv.Atoi(window[1:]); err != nil {
+			return config.Invalid("invalid window ID")
+		}
+		args = append([]string{"select-window", "-t", window, ";"}, args...)
+	}
+	cmd := exec.CommandContext(ctx, "tmux", m.Args(args...)...)
+	cmd.Stdin = in
+	cmd.Stdout = out
+	cmd.Stderr = stderr
+	if err = cmd.Start(); err != nil {
+		return err
+	}
+	a := Attachment{SessionID: s.SessionID, Generation: s.Generation, PID: cmd.Process.Pid}
+	b, _ := json.Marshal(a)
+	if err = config.AtomicWrite(path, b, 0600); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("attach status registration failed: %w", err)
+	}
+	defer os.Remove(path)
+	return cmd.Wait()
+}
