@@ -3,12 +3,22 @@
 通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量工具。项目定义保存在
 远端，客户端复用系统 OpenSSH。远端无需数据库、HTTP API 或常驻 tdev 服务。
 
-首版版本为 `0.0.1`，已实现项目会话、独立转发与重连、文件传输、SSHFS
+当前版本为 `0.0.2`，已实现项目会话、独立转发与重连、文件传输、SSHFS
 挂载、签名安装升级和回滚。设计基线见[产品与技术设计](docs/design.md)，实现取舍见
 [开发记录](docs/development.md)，实际通过与尚未实测的场景见[第一版验收记录](docs/acceptance.md)。
-版本变更见[发布说明](docs/releases/v0.0.1.md)。源码 Release 位于
-[GitHub](https://github.com/JourneyBean/tdev/releases/tag/v0.0.1) 和
-[GitLab](https://git.mewwoof.cn/JourneyBean/tdev/-/releases/v0.0.1)。
+版本变更见[发布说明](docs/releases/v0.0.2.md)。二进制 Release 位于
+[GitHub](https://github.com/JourneyBean/tdev/releases/tag/v0.0.2)。
+
+## 安装
+
+```sh
+curl -fsSL https://github.com/JourneyBean/tdev/releases/latest/download/install.sh | sh
+```
+
+自动识别 macOS/Linux 及 amd64/arm64，校验后安装到 `~/.local/bin/tdev`，并配置当前 shell 的 PATH。
+打开新终端，或执行安装器输出的 PATH 命令即可使用。支持 `--no-modify-path`，也可以单独运行 `tdev path --write`。
+
+[四平台二进制下载、手动安装和签名校验](docs/installation.md)
 
 ## 构建与验证
 
@@ -180,5 +190,4 @@ bootstrap 脚本需要 OpenSSL 3+（可通过 `OPENSSL` 指定路径），在线
 
 ## 后续范围
 
-HTTP `*.localhost` 代理属于后续版本。当前 Release 提供源码归档，
-签名二进制安装包待配置发布密钥后提供。
+HTTP `*.localhost` 代理属于后续版本。

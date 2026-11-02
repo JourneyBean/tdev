@@ -18,7 +18,7 @@ import (
 	"tdev/internal/tmux"
 )
 
-var Version = "0.0.1"
+var Version = "0.0.2"
 
 type app struct {
 	root        *cobra.Command
@@ -49,6 +49,7 @@ func Execute(args []string, in io.Reader, out, errOut io.Writer) int {
 	}})
 	a.local()
 	a.client()
+	a.pathCommand()
 	r.SetArgs(args)
 	err := r.Execute()
 	if err == nil {

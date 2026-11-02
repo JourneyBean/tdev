@@ -282,6 +282,32 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 			t.Fatal(err)
 		}
 		v1 := signedRelease(t, binary, "0.1.0-dev", key)
+		template, err := os.ReadFile("../../scripts/install.sh")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = update.BuildInstaller(v1, string(template)); err != nil {
+			t.Fatal(err)
+		}
+		bootstrapHome := filepath.Join(t.TempDir(), "用户 home")
+		if err = os.Mkdir(bootstrapHome, 0700); err != nil {
+			t.Fatal(err)
+		}
+		bootstrap := exec.Command("sh", filepath.Join(v1, "install.sh"), "--release-dir", v1, "--shell", "bash", "--config-dir", filepath.Join(bootstrapHome, "config"))
+		bootstrap.Env = append(os.Environ(), "HOME="+bootstrapHome, "OPENSSL=/nonexistent/openssl")
+		if output, err := bootstrap.CombinedOutput(); err != nil {
+			t.Fatalf("pinned bootstrap without OpenSSL failed: %v %s", err, output)
+		}
+		installed := filepath.Join(bootstrapHome, ".local/bin/tdev")
+		if err = update.Candidate(context.Background(), installed, "0.1.0-dev"); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{".bashrc", ".profile"} {
+			content, err := os.ReadFile(filepath.Join(bootstrapHome, name))
+			if err != nil || !bytes.Contains(content, []byte(filepath.Dir(installed))) {
+				t.Fatalf("PATH configuration missing in %s: %v", name, err)
+			}
+		}
 		v2binary := buildCLI(t, "0.1.1-dev")
 		v2 := signedRelease(t, v2binary, "0.1.1-dev", key)
 		local := filepath.Join(t.TempDir(), "managed", "tdev")

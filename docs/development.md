@@ -1,6 +1,14 @@
 # 开发记录与实现取舍
 
-Last verified: 2026-11-02。版本：0.0.1。历史集成验收使用开发版版本号，见验收记录。
+Last verified: 2026-11-02。版本：0.0.2。历史集成验收使用开发版版本号，见验收记录。
+
+## v0.0.2 安装与分发
+
+提供四平台的二进制和压缩包。发布时从已签名 manifest 生成版本专属安装脚本，内置发布公钥与各平台的 SHA-256。bootstrap 用固定摘要校验二进制后执行候选程序，由候选程序再次验证 Ed25519 manifest、版本和协议。普通安装复用系统 SHA-256 工具；自定义可信公钥模式保留 OpenSSL 3+ 签名校验路径。
+
+默认在线安装记录 `releases/latest/download`，后续 `tdev upgrade` 复用已保存的公钥获取最新签名包。交叉构建使用 `-trimpath -buildvcs=false`，避免产物携带工作目录或构建时工作树状态。
+
+`tdev path` 默认输出当前 shell 的配置命令；`--write` 为用户启动文件写入独立标记块。写入持有配置锁，备份已有内容并保留权限和符号链接；修改前再次检查文件内容，重复执行保持幂等。安装器默认配置 PATH，自定义安装目录需 `--add-path`，或使用 `--no-modify-path` 跳过。当前父 shell 由用户执行打印的命令或新开终端后生效。
 
 源码发布于 [GitHub](https://github.com/JourneyBean/tdev) 和
 [GitLab](https://git.mewwoof.cn/JourneyBean/tdev)。

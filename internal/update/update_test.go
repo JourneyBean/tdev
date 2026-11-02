@@ -70,6 +70,30 @@ func TestSignaturesTamperAndVersion(t *testing.T) {
 		t.Fatal("accepted changed artifact")
 	}
 }
+func TestPackagedInstallerRejectsTamperedBinary(t *testing.T) {
+	dir, _ := releaseFixture(t, "0.1.0")
+	template, err := os.ReadFile("../../scripts/install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = BuildInstaller(dir, string(template)); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "executed")
+	asset := filepath.Join(dir, "tdev-"+runtime.GOOS+"-"+runtime.GOARCH)
+	if err = os.WriteFile(asset, []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", filepath.Join(dir, "install.sh"), "--release-dir", dir, "--no-modify-path")
+	cmd.Env = append(os.Environ(), "OPENSSL=/nonexistent/openssl")
+	if output, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("accepted tampered packaged binary: %s", output)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("executed unauthenticated bytes")
+	}
+}
+
 func TestInstallUpgradeRollbackAndExternalChanges(t *testing.T) {
 	ctx := context.Background()
 	store := config.Store{Root: t.TempDir()}

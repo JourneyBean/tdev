@@ -1,10 +1,10 @@
 GO ?= go
-VERSION ?= 0.0.1
+VERSION ?= 0.0.2
 LDFLAGS = -X tdev/internal/cli.Version=$(VERSION)
 
 .PHONY: build test check cross release
 build:
-	CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o bin/tdev ./cmd/tdev
+	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -ldflags '$(LDFLAGS)' -o bin/tdev ./cmd/tdev
 
 test:
 	$(GO) test -race ./...
@@ -18,7 +18,7 @@ check:
 cross:
 	@set -eu; for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
 		os=$${platform%/*}; arch=$${platform#*/}; \
-		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/tdev-$$os-$$arch ./cmd/tdev; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -buildvcs=false -ldflags '$(LDFLAGS)' -o dist/tdev-$$os-$$arch ./cmd/tdev; \
 	done
 
 release: cross
