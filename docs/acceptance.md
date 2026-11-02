@@ -10,6 +10,7 @@ Last verified: 2026-11-02。发布目标版本：0.0.1。下表保留集成验�
 - 正式安装脚本生成后，内置 SHA-256 校验值、公钥和默认发布地址；篡改二进制会在执行前被拒绝。
 - Linux amd64、macOS arm64：隔离 HOME 中安装成功，覆盖中文和带空格目录；设置不存在的 OpenSSL 路径仍可使用固定校验值的安装器。
 - PATH：bash/zsh 启动文件可找到安装后的命令，重复设置没有重复标记或路径；已有内容、权限、符号链接和备份均有测试。shell 引号测试覆盖空格、UTF-8、引号、美元符和反引号。
+- 公开 v0.0.2 分发链路：四个平台压缩包下载均返回 HTTP 200；Linux amd64 与 macOS arm64 使用 `releases/latest/download/install.sh` 完成在线一键安装及 PATH 验证，macOS 另通过在线签名升级和回滚。
 - Linux arm64、macOS amd64 完成交叉构建，原生安装仍待对应硬件验证。fish 路径生成已有测试，原生 shell 执行待安装 fish 的环境验证。
 
 ## 环境与检查
