@@ -1,13 +1,14 @@
 # tdev
 
-通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量工具。项目定义保存在
-远端，客户端复用系统 OpenSSH。远端无需数据库、HTTP API 或常驻 tdev 服务。
+通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量工具。运行 `tdev setup`
+选择已有连接或填写服务器地址，读取目标设备的项目配置，随后打开项目继续开发。
+复用系统 OpenSSH 和 tmux，远端无需数据库、HTTP API 或常驻 tdev 服务。
 
-当前版本为 `0.0.2`，已实现项目会话、独立转发与重连、文件传输、SSHFS
+当前版本为 `0.0.3`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
 挂载、签名安装升级和回滚。设计基线见[产品与技术设计](docs/design.md)，实现取舍见
 [开发记录](docs/development.md)，实际通过与尚未实测的场景见[第一版验收记录](docs/acceptance.md)。
-版本变更见[发布说明](docs/releases/v0.0.2.md)。二进制 Release 位于
-[GitHub](https://github.com/JourneyBean/tdev/releases/tag/v0.0.2)。
+版本变更见[发布说明](docs/releases/v0.0.3.md)。二进制 Release 位于
+[GitHub](https://github.com/JourneyBean/tdev/releases/tag/v0.0.3)。
 
 ## 安装
 
@@ -16,9 +17,81 @@ curl -fsSL https://github.com/JourneyBean/tdev/releases/latest/download/install.
 ```
 
 自动识别 macOS/Linux 及 amd64/arm64，校验后安装到 `~/.local/bin/tdev`，并配置当前 shell 的 PATH。
+安装完成后询问是否配置 bash/zsh 命令补全，支持 `curl | sh`；使用 `--completion all` 可直接配置两种 shell，`--no-completion` 跳过。
 打开新终端，或执行安装器输出的 PATH 命令即可使用。支持 `--no-modify-path`，也可以单独运行 `tdev path --write`。
 
 [四平台二进制下载、手动安装和签名校验](docs/installation.md)
+
+## Shell 命令补全
+
+一键配置启动文件，打开新终端生效：
+
+```sh
+tdev completion install                     # 根据 SHELL 选择
+tdev completion install --shell all         # 同时配置 bash 和 zsh
+```
+
+重复执行只更新管理区块，保留原配置、权限和符号链接，并在修改前备份。补全与 PATH 使用独立区块。
+
+使用新版 `tdev`，在当前终端加载补全：
+
+```sh
+# zsh：放在已有 compinit 初始化之后
+autoload -Uz compinit && compinit
+source <(tdev completion zsh)
+
+# bash
+source <(tdev completion bash)
+```
+
+将对应的 `source` 行加入 `~/.zshrc` 或 Bash 的交互启动文件即可持久启用。
+支持子命令、选项、`--server` / `--remote` 服务器名、SSH 别名、窗口与转发 ID。
+`tdev open <Tab>` 查询默认服务器的项目，`tdev open dev/<Tab>` 查询指定服务器；
+`tdev create <Tab>` 补全服务器前缀，供继续填写新项目名。远端候选每次只读查询，
+使用非交互 SSH 和 1.5 秒等待上限，连接不可用时返回空候选。脚本生成过程只读取命令结构。
+
+## 开始使用
+
+```sh
+tdev setup                       # 选择已有连接，或填写服务器地址
+tdev ls                          # 发现远端项目和当前状态
+tdev open my-awsome-project       # 打开工作区
+```
+
+向导会读取目标设备的已有配置，按需安装远端 tdev，并保留现有项目。远端没有项目时，可立即进入创建向导，填写项目名和远端已有目录。
+
+也可以直接运行 `tdev open my-awsome-project`。项目尚未配置时，确认创建并填写远端目录，随后直接进入工作区。
+
+## 从客户端管理项目
+
+连接保存后，随时在本机运行项目向导：
+
+```sh
+tdev create                                 # 选择服务器，再添加项目
+tdev create --server dev                     # 指定已保存的服务器
+tdev create dev/demo --directory /home/developer/projects/demo
+tdev project list --server dev
+tdev project show dev/demo
+tdev project update dev/demo --directory /home/developer/projects/new-demo
+tdev project window add dev/demo --id web --name 前端 --command 'npm run dev'
+tdev project window add dev/demo --id api --name 后端 --command 'uv run python manage.py runserver'
+tdev project forward add dev/demo -L 3000:localhost:3000 -L 8000:localhost:8000
+tdev open dev/demo
+```
+
+项目创建时带有一个 shell 窗口。目录应在远端已存在，向导支持绝对路径和 `~/路径`。
+向导输入支持左右方向键、Home/End 和删除键。远端目录输入按 Tab 补全；多个候选时，再按 Tab 进入选择，用方向键切换、Enter 确认。
+未指定服务器时，创建向导先列出已保存的服务器；可输入序号或名称，回车选择列表中标注的默认项。`--server dev` 或 `dev/demo` 可直接指定服务器。脚本调用需要显式指定服务器和远端目录。
+管理命令通过 SSH 读写远端项目定义，修改带 revision 检查并保留备份；窗口启动命令在新建会话时执行。运行中的会话继续使用当前窗口。
+
+```sh
+tdev project window remove dev/demo --id api
+tdev project forward remove dev/demo --id FORWARD_ID
+tdev override dev/demo --forward FORWARD_ID --local-port 8080
+```
+
+`project forward` 管理共享转发定义，本机端口偏好使用 `override`。稳定 ID 可从 `project show` 查看。
+完整项目替换使用 `project update --stdin --expected-revision N`，输入为 `project show` 中的原始项目 YAML/JSON；窗口替换使用 `project window update --id ID --stdin`。
 
 ## 构建与验证
 
@@ -66,8 +139,15 @@ make cross
 
 ## 从客户端连接
 
-复用已有 SSH alias，或创建 tdev 私有的 SSH profile。私有 profile 引用现有身份，
-并 Include 用户原有 SSH config；不会重写 `~/.ssh/config` 或分发密钥。
+运行连接向导，自动读取已登记的服务器、SSH `Host` 和 `Include` 文件；可以选择、搜索，或直接填写 `user@host:port`。向导验证连接后列出远端已有项目，保留已有配置，并可调整这些项目在本机使用的端口。远端缺少 tdev 时可确认安装官方签名版本；缺少 tmux 时提示先准备依赖。
+
+```sh
+tdev setup
+tdev ls
+tdev open my-awsome-project
+```
+
+已有服务器再次运行向导时，保留其连接信息、远端配置目录及本机偏好。新增主机使用私有 SSH profile，引用现有身份和 SSH 配置。参数形式继续供脚本使用：
 
 ```sh
 tdev setup --name research --ssh-alias my-existing-alias --remote-binary .local/bin/tdev
@@ -112,9 +192,20 @@ ssh:
 
 ## 转发
 
+`ls`、`open` 每次读取远端最新配置，再合并本机 `overrides.yaml`。调整本机端口可在向导中完成，也可以使用：
+
+```sh
+tdev override demo                       # 查看远端与合并后的配置
+tdev override demo --forward api --local-port 8080
+tdev override demo --reset               # 恢复远端默认值
+```
+
+`api` 是远端映射的稳定 ID，可从 `tdev ls` 查看。项目目录、窗口和命令实时读取，本机只保存端口差异及附加转发。
+
 ```sh
 tdev forward demo -L 3000:localhost:8000
-tdev forward demo -R 9000:localhost:3000 --save
+tdev forward demo -L 8080:localhost:8000 --save
+tdev forward demo -R 9000:localhost:3000 --save-remote
 ```
 
 与 OpenSSH 一致，`-L` 本机监听、`-R` 远端监听，均为
@@ -124,6 +215,7 @@ tdev forward demo -R 9000:localhost:3000 --save
 
 每条映射拥有独立 SSH master 和私有控制 socket；通过 OpenSSH 控制请求确认监听
 建立后才报告 ready。端口冲突不接管其他连接，失败和重连互相隔离。
+`--save` 将 `-L` 映射保存为本机 override；匹配已有远端目标时只覆盖本机监听地址和端口，否则保存为本机附加转发。`--save-remote` 显式保存共享项目定义，反向转发使用此选项。
 保存定义与监听建立分别报告，保存成功而监听失败时保留定义并返回部分失败。
 
 前台 forward 和 open 的隧道归当前进程所有，退出时取消自己的映射和连接。

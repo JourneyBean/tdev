@@ -56,8 +56,19 @@ func (a *app) forwardCommand() {
 			return err
 		}
 		save, _ := c.Flags().GetBool("save")
+		saveRemote, _ := c.Flags().GetBool("save-remote")
+		if save && saveRemote {
+			return config.Invalid("choose --save or --save-remote")
+		}
 		saved := false
 		if save {
+			if err = a.saveOverride(c.Context(), t, p, func(o *projectOverride) error { return saveLocalForwards(p, o, fs) }); err != nil {
+				return err
+			}
+			saved = true
+			fmt.Fprintf(a.errOut, "Mappings saved on this client for %s/%s.\n", t.Name, p.Name)
+		}
+		if saveRemote {
 			for _, f := range fs {
 				if f.Direction == "R" {
 					if err = a.confirm("Save reverse forwards? Multiple clients may compete for remote listeners; traffic reaches the client that establishes each listener."); err != nil {
@@ -98,7 +109,62 @@ func (a *app) forwardCommand() {
 	a.root.AddCommand(c)
 	forwardFlags(c)
 	retryFlags(c)
-	c.Flags().Bool("save", false, "save complete definitions separately from listener success")
+	c.Flags().Bool("save", false, "save -L mappings as this client's project overrides")
+	c.Flags().Bool("save-remote", false, "save shared project definitions on the server (including -R)")
+}
+
+func saveLocalForwards(remote config.Project, override *projectOverride, forwards []config.Forward) error {
+	if override.ProjectID != "" && override.ProjectID != remote.ID {
+		return config.Invalid("project identity changed; reset local overrides first")
+	}
+	override.ProjectID = remote.ID
+	if override.Forwards == nil {
+		override.Forwards = map[string]forwardOverride{}
+	}
+	for _, f := range forwards {
+		if f.Direction != "L" {
+			return config.Invalid("--save stores client-only -L mappings; use --save-remote for shared -R definitions")
+		}
+		var matches []config.Forward
+		for _, original := range remote.Forwards {
+			if original.Direction == "L" && original.TargetHost == f.TargetHost && original.TargetPort == f.TargetPort {
+				matches = append(matches, original)
+			}
+		}
+		if len(matches) > 1 {
+			return config.Invalid("multiple remote mappings use this target; select a stable ID with tdev override --forward")
+		}
+		if len(matches) == 1 {
+			original := matches[0]
+			patch := forwardOverride{}
+			if f.ListenPort != original.ListenPort {
+				port := f.ListenPort
+				patch.ListenPort = &port
+			}
+			if f.BindAddress != original.BindAddress {
+				bind := f.BindAddress
+				patch.BindAddress = &bind
+			}
+			if patch.ListenPort == nil && patch.BindAddress == nil {
+				delete(override.Forwards, original.ID)
+			} else {
+				override.Forwards[original.ID] = patch
+			}
+		} else {
+			duplicate := false
+			for _, old := range override.LocalForwards {
+				if old.Spec() == f.Spec() {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				override.LocalForwards = append(override.LocalForwards, f)
+			}
+		}
+	}
+	_, err := mergeProject(remote, *override)
+	return err
 }
 
 // Background forwarding events are written only to a private log, never to the live terminal.

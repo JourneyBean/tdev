@@ -117,7 +117,9 @@ doctor、version、unmount、upgrade 是实现默认补充接口。第一版不�
 
 ### 4.2 setup
 
-流程：输入主机、端口、用户、别名 → 选择已有密钥/agent 或明确选择生成专用密钥 → 建立和验证连接 → 安装/验证远端 tdev 与 tmux → 设置默认服务器和偏好。
+流程：自动读取已登记连接与 SSH Host/Include → 选择或搜索服务器，或填写 `user@host:port` → 验证 SSH → 检测已有远端 tdev 或确认安装 → 读取目标设备已有项目 → 按需调整本机端口 → 保存连接。
+
+重复设置已登记服务器时，保留现有远端配置目录、私有 SSH profile、重连偏好和本机 override。连接、依赖和配置读取成功后保存；失败时可重试，Ctrl-C 退出。SSH 配置发现只读取显示所需字段，`Match exec` 交给真正发起连接时的 OpenSSH 处理。`--json` 或无终端时，使用显式 `--host`/`--ssh-alias` 参数。
 
 - 优先复用已有 SSH config 和认证方式。只添加 tdev 管理的配置块或独立 Include 文件，不重写整个 SSH config。
 - 复制公钥必须有一次可用的引导认证；交给系统 SSH 处理密码、MFA、host key 提示，不捕获密码。
@@ -129,13 +131,13 @@ doctor、version、unmount、upgrade 是实现默认补充接口。第一版不�
 
 ### 4.3 open
 
-1. 解析服务器与项目，检查远端协议兼容性，获取项目定义。
+1. 解析服务器与项目，检查远端协议兼容性，实时获取项目定义并合并本机 override。
 2. 调用 session ensure：存在则返回实际会话；不存在则按配置创建。
 3. 在本地建立保存的转发；冲突只影响对应入口，明确显示失败。
 4. 恢复终端状态，将交互终端交给系统 ssh -t 连接 tmux。
 5. 正常 detach 则结束该次 open；异常断线进入重连状态机。
 
-不存在的项目不自动猜测目录。实现默认决策：报出创建命令；先通过 local project create 创建配置。后续可以为 open 增加显式 --directory 创建选项，但不能无提示创建。
+交互终端中，open 遇到尚未配置的项目时询问是否创建，填写远端已有目录后继续打开。拒绝保留 PROJECT_NOT_FOUND，Ctrl-C 取消；连接或配置错误按原错误返回。也可从客户端运行 `tdev create`。setup 发现零项目时提供立即创建入口。`project list/show/update`、`project window` 和 `project forward` 经 SSH 管理远端定义，复用原子写入、revision 和备份机制。本机端口偏好继续使用 override。
 
 ensure 必须在并发客户端调用下幂等：不重复创建窗口，不重复执行启动命令。发现未完成初始化的 session 时返回可诊断状态，不盲目重新运行全部命令。可使用项目操作锁和初始化标记，成功启动每个窗口后记录完成状态；崩溃恢复采取显式修复，不追求未经确认的自动重放。
 
@@ -187,7 +189,7 @@ tdev forward demo -L 8000
 tdev forward demo -R 9000
 
 # 连续设置；两种方向均可保存
-tdev forward demo -L 8000 -L 5173 -R 9000:3000 --save
+tdev forward demo -L 8000 -L 5173 -R 9000:3000 --save-remote
 ```
 
 支持标准 TCP 形式 `[bind_address:]port:host:hostport`，IPv6 地址使用方括号。第一版不支持 -D、Unix socket forwarding 和远端动态分配监听端口 0；明确拒绝，不错误解析。端口范围 1–65535。默认监听回环地址，不自动开放到公网或修改服务端 GatewayPorts。
@@ -198,7 +200,8 @@ tdev forward demo -L 8000 -L 5173 -R 9000:3000 --save
 
 ### 5.2 保存
 
-- -L/-R、同端口/不同端口都可以保存，完整定义存远端。
+- --save：将 -L 映射保存到本机 overrides.yaml；已有远端目标通过稳定 ID 覆盖本机监听端口。
+- --save-remote：显式保存到远端项目 YAML，供项目使用者共享，支持 -L 和 -R。
 - 保存 -R 前明确提示多个客户端可能争用同一远端端口，流量将到达成功建立映射的客户端。
 - -y 或标准输入 y/yes 接受该提示；后续 open 恢复已保存定义时不重复询问。
 - 保存请求先完整校验；无效参数不进行部分保存。
@@ -344,6 +347,21 @@ reconnect:
 ```
 
 本地默认使用 XDG 风格目录。runtime/state 保存本机挂载和操作所有权等临时信息。进程归属通过 PID、启动标识与进程身份共同核验。
+
+本机端口偏好单独写入 `overrides.yaml`，例如：
+
+```yaml
+schema_version: 1
+servers:
+  development:
+    demo:
+      project_id: 22222222-2222-4222-8222-222222222222
+      forwards:
+        api:
+          listen_port: 8080
+```
+
+向导自动记录项目 UUID 和稳定 forward ID。`ls`、`open` 每次从服务器读取最新项目，再覆盖本机监听端口；目录、窗口、命令和转发目标继续使用本次发现的值。远端移除映射或同名项目身份变化时，提示重置过期 override。保存窗口与项目使用远端原始定义。
 
 ### 7.3 写入与并发
 

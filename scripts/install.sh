@@ -9,10 +9,12 @@ release_dir= release_url= public_key= version= shell=auto
 destination="${HOME}/.local/bin/tdev"
 config_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/tdev"
 modify_path=auto custom_destination=no default_source=no
+completion=auto
 usage() {
   printf '%s\n' 'Install tdev for macOS/Linux. No sudo required.' \
     'Usage: sh install.sh [--version VERSION] [--no-modify-path | --add-path] [--shell auto|bash|zsh|fish|sh]' \
     '       [--destination PATH] [--config-dir DIR]' \
+    '       [--completion auto|none|bash|zsh|all | --install-completion | --no-completion]' \
     '       [--release-dir DIR | --release-url HTTPS_URL] [--public-key TRUSTED_PEM]'
 }
 while [ "$#" -gt 0 ]; do
@@ -20,18 +22,22 @@ while [ "$#" -gt 0 ]; do
     --help|-h) usage; exit 0 ;;
     --no-modify-path) modify_path=no; shift ;;
     --add-path) modify_path=yes; shift ;;
-    --release-dir|--release-url|--public-key|--version|--destination|--config-dir|--shell)
+    --install-completion) completion=yes; shift ;;
+    --no-completion) completion=none; shift ;;
+    --release-dir|--release-url|--public-key|--version|--destination|--config-dir|--shell|--completion)
       [ "$#" -ge 2 ] || { usage >&2; exit 2; }
       case "$1" in
         --release-dir) release_dir=$2 ;; --release-url) release_url=$2 ;;
         --public-key) public_key=$2 ;; --version) version=$2 ;;
         --destination) destination=$2; custom_destination=yes ;;
         --config-dir) config_dir=$2 ;; --shell) shell=$2 ;;
+        --completion) completion=$2 ;;
       esac
       shift 2 ;;
     *) usage >&2; exit 2 ;;
   esac
 done
+case "$completion" in auto|yes|none|bash|zsh|all) ;; *) printf '%s\n' 'Completion must be auto, none, bash, zsh or all.' >&2; exit 2 ;; esac
 case "$destination" in '~/'*) destination="$HOME/${destination#\~/}" ;; esac
 case "$release_version" in @*) packaged=no ;; *) packaged=yes ;; esac
 if [ -z "$version" ] && [ "$packaged" = yes ]; then version=$release_version; fi
@@ -115,4 +121,30 @@ if [ "$modify_path" = yes ]; then
 else
   printf 'To configure PATH later, run: "%s" path --write\n' "$destination"
 fi
-printf '\nStart with: tdev setup --help\n'
+completion_shell=$shell
+if [ "$completion_shell" = auto ]; then completion_shell=${SHELL:-}; completion_shell=${completion_shell##*/}; fi
+case "$completion_shell" in bash|zsh) ;; *) completion_shell=all ;; esac
+case "$completion" in
+  auto)
+    # A curl | sh installer reads its answer from the controlling terminal.
+    if ( : </dev/tty ) 2>/dev/null; then
+      if [ "$completion_shell" = all ]; then completion_label='bash and zsh'; else completion_label=$completion_shell; fi
+      printf '\nConfigure %s command completion? [Y/n] ' "$completion_label" >/dev/tty
+      if IFS= read -r completion_answer </dev/tty; then
+        case "$completion_answer" in ''|y|Y|yes|YES) completion=$completion_shell ;; *) completion=none ;; esac
+      else
+        completion=none
+      fi
+    else
+      completion=none
+      printf 'Configure completion later: "%s" completion install --shell %s\n' "$destination" "$completion_shell"
+    fi ;;
+  yes) completion=$completion_shell ;;
+esac
+if [ "$completion" != none ]; then
+  "$destination" --config-dir "$config_dir" completion install --shell "$completion" || {
+    printf 'Binary installed. Completion setup needs attention; run: "%s" completion install --shell %s\n' "$destination" "$completion" >&2
+    exit 9
+  }
+fi
+printf '\nStart with: tdev setup\n'

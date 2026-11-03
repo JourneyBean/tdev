@@ -1,6 +1,14 @@
 # 开发记录与实现取舍
 
-Last verified: 2026-11-02。版本：0.0.2。历史集成验收使用开发版版本号，见验收记录。
+Last verified: 2026-11-03。版本：0.0.3。历史集成验收使用开发版版本号，见验收记录。
+
+## v0.0.3 连接向导与配置发现
+
+`setup` 从本机已有 tdev 连接和 SSH Host/Include 发现候选，支持搜索、序号选择和直接填写地址。读取 SSH 配置时仅提取展示字段，避免为了展示列表执行 Match 命令。向导本身不受单次 SSH 超时限制，每次远端请求独立计时；Ctrl-C 或 EOF 退出。参数形式和 JSON 机器接口保留。
+
+验证连接后探测已有远端程序，读取远端项目及会话状态，按需提示安装。新地址使用私有 SSH profile，既有服务器保留原配置目录与偏好。提交本机连接前重新读取并检查同一服务器配置，冲突时停止，其他服务器的并发改动保留。
+
+`client.yaml` 继续保存连接及重连偏好；本机监听端口差异和附加 -L 单独保存在 `overrides.yaml`。`ls` 和 `open` 每次发现远端定义后合并，覆盖按项目 UUID 和稳定 forward ID 绑定；过期身份、已删除映射、重复监听和非法端口在执行前报错。`get` 保持读取远端原始定义，避免 `save` 把客户端差异写回远端。`forward --save-remote` 是共享定义的显式写入入口。
 
 ## v0.0.2 安装与分发
 
@@ -10,8 +18,7 @@ Last verified: 2026-11-02。版本：0.0.2。历史集成验收使用开发版�
 
 `tdev path` 默认输出当前 shell 的配置命令；`--write` 为用户启动文件写入独立标记块。写入持有配置锁，备份已有内容并保留权限和符号链接；修改前再次检查文件内容，重复执行保持幂等。安装器默认配置 PATH，自定义安装目录需 `--add-path`，或使用 `--no-modify-path` 跳过。当前父 shell 由用户执行打印的命令或新开终端后生效。
 
-源码发布于 [GitHub](https://github.com/JourneyBean/tdev) 和
-[GitLab](https://git.mewwoof.cn/JourneyBean/tdev)。
+源码发布于 [GitHub](https://github.com/JourneyBean/tdev)。
 
 ## 已实现的第一版范围
 
@@ -96,12 +103,19 @@ bootstrap 先通过 OpenSSL 3+ 校验签名校验表和二进制哈希，再执�
 下载大小、HTTPS 和安全重定向。远端不必访问发布网站：客户端验证后上传，远端校验上传
 内容，再执行签名候选安装。更新不重启 tmux，不修改 authorized_keys，不执行 sudo。
 
-setup 支持既有 alias，或使用现有 identity/agent 创建私有 SSH profile；配置保存在客户端，
-Include 既有 SSH config。新建密钥、公钥分发和交互 MFA 引导没有封装为自动流程。
-安装/传输需可批模式认证的身份；缺少依赖时明确失败。当前 Release 提供源码归档，
-签名二进制安装包待配置发布密钥后提供。
+setup 自动读取已有连接，也支持使用现有 identity/agent 创建私有 SSH profile，Include 既有 SSH config。认证交给系统 OpenSSH，安装与传输需要可批模式认证的身份。缺少 tmux 等依赖时提示先准备环境。四平台签名二进制与安装脚本由公开 Release 分发。
 
 ## 验证与回退
+
+Shell 补全复用 Cobra 的 Bash V2 / zsh 脚本生成和隐藏补全协议。注册服务器、项目、SSH 别名及定义 ID 的候选函数；远端项目来自 `project list` 原始定义，批模式 SSH 查询限时 1.5 秒，避免终端 Tab 等待交互认证或输出诊断。Bash 脚本提供私有帮助函数，兼容未安装 bash-completion 的环境。文件传输的本机路径继续使用 shell 文件补全。
+安装器成功安装后可配置补全：管道脚本通过 `/dev/tty` 询问，支持显式选择或跳过；本机二进制 install 也提供对应选项。`completion install` 复用 shellpath 的备份、权限、符号链接及并发保护，在独立 completion 管理区块中加载绝对路径的二进制。共享 `.profile` 保持 POSIX sh 语法，并仅在匹配的交互 shell 中加载补全。
+
+客户端项目管理使用已有远端 `project/config/window/forward` 协议，兼容已发布远端。
+`tdev create` 提供逐项问答，setup 保存空服务器后也可立即创建；旧的 `project create` 入口保持兼容。输入目录经远端验证和规范化，支持 `~/`、UTF-8、空格与引号。创建默认 shell 窗口。
+交互 open 收到远端 PROJECT_NOT_FOUND 时复用创建向导，成功后继续 ensure、恢复转发和 attach。拒绝返回退出码 3，取消返回 130；JSON 和无终端调用保持非交互要求。
+向导终端输入使用 Bubble Tea 和 Bubbles textinput，支持光标移动、Home/End 和删除，输入历史保持关闭。标签与可横向滚动的输入分行显示，候选菜单最多七行并随终端尺寸收缩，长名称仅在展示时截断。终端模式、换行和光标恢复统一由渲染器管理。远端目录 Tab 补全经 SSH 异步只读枚举，支持 `~/`、绝对路径和多候选选择；编辑后丢弃旧查询结果。查询使用批模式、3 秒超时和候选数量上限，路径参数经过 shell 引用，候选以 NUL 分隔。提交、Ctrl-D、Ctrl-C 和外部信号均恢复终端设置。
+创建项目未指定服务器时，先选择已保存的服务器，默认项可回车确认；选择只作用于本次创建。`--server` 和 `server/project` 可显式指定目标，脚本调用必须明确服务器与目录。
+`project show/update` 编辑原始远端定义，窗口与共享转发管理自动带上读取时的 revision；完整 stdin 替换要求显式 expected-revision。本机 override 保持独立。配置修改只影响后续会话创建。
 
 实际结果和待验证项见[验收记录](acceptance.md)。构建使用 Go 1.27.3，依赖记录于
 go.mod/go.sum。运行产物无需 Go。

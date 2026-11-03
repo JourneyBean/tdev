@@ -34,14 +34,21 @@ func (a *app) bundle(ctx context.Context, c *cobra.Command, goos, arch string, r
 	if dir == "" && source == "" && receipt != nil {
 		source = receipt.SourceURL
 	}
-	if key == "" && receipt != nil {
+	if key == "" {
+		if receipt == nil && dir != "" {
+			return update.Bundle{}, config.Invalid("--public-key is required for a custom local release")
+		}
+		publicKey := update.OfficialPublicKey
+		if receipt != nil {
+			publicKey = receipt.PublicKey
+		}
 		f, err := os.CreateTemp("", "tdev-trust-*.pem")
 		if err != nil {
 			return update.Bundle{}, err
 		}
 		name := f.Name()
 		defer os.Remove(name)
-		if _, err = f.WriteString(receipt.PublicKey); err != nil {
+		if _, err = f.WriteString(publicKey); err != nil {
 			f.Close()
 			return update.Bundle{}, err
 		}
@@ -50,8 +57,8 @@ func (a *app) bundle(ctx context.Context, c *cobra.Command, goos, arch string, r
 		}
 		key = name
 	}
-	if key == "" {
-		return update.Bundle{}, config.Invalid("--public-key is required for the first installation; it must come from an independent trusted channel")
+	if dir == "" && source == "" {
+		source = update.OfficialReleaseURL
 	}
 	return update.Load(ctx, dir, source, key, version, goos, arch)
 }
@@ -97,6 +104,16 @@ func (a *app) updateCommands() {
 		op := op
 		c := &cobra.Command{Use: op, Short: op + " a signed local or remote binary without restarting sessions", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
 			remote, _ := c.Flags().GetString("remote")
+			completionMode := "none"
+			if op == "install" {
+				completionMode, _ = c.Flags().GetString("completion")
+				if !validCompletionMode(completionMode) {
+					return config.Invalid("completion must be auto, none, bash, zsh or all")
+				}
+				if remote != "" && c.Flags().Changed("completion") {
+					return config.Invalid("--completion configures local shells; run completion install on the target device")
+				}
+			}
 			rollback, _ := c.Flags().GetBool("rollback")
 			destination, _ := c.Flags().GetString("destination")
 			var receipt *update.Receipt
@@ -151,6 +168,15 @@ func (a *app) updateCommands() {
 				}
 			}
 			result, err := update.Install(c.Context(), a.store, b, destination)
+			if err == nil && op == "install" {
+				completion, completionErr := a.configureCompletionAfterInstall(c.Context(), completionMode, destination)
+				if completionErr != nil {
+					return protocol.Fail("PARTIAL_SUCCESS", 9, "binary installed; completion configuration failed: %v", completionErr)
+				}
+				if completion != nil {
+					return a.result(map[string]any{"installation": result, "completion": completion}, nil)
+				}
+			}
 			return a.result(result, err)
 		}}
 		a.root.AddCommand(c)
@@ -158,6 +184,9 @@ func (a *app) updateCommands() {
 		c.Flags().String("destination", "", "install destination (defaults to ~/.local/bin/tdev; upgrade defaults to current managed binary)")
 		c.Flags().String("remote", "", "install/upgrade on a registered server")
 		c.Flags().Bool("rollback", false, "restore previous binary instead of downloading a release")
+		if op == "install" {
+			c.Flags().String("completion", "auto", "configure shell completion: auto (ask), none, bash, zsh or all")
+		}
 	}
 }
 func (a *app) shell(ctx context.Context, t target, command string) ([]byte, error) {
@@ -201,8 +230,10 @@ func (a *app) installRemote(ctx context.Context, t target, c *cobra.Command) (an
 		return nil, err
 	}
 	defer b.Close()
-	if err = a.confirm(fmt.Sprintf("Install signed %s on %s at %s, retaining any prior binary?", b.Manifest.Version, t.Server.SSHAlias, t.Server.RemoteBinary)); err != nil {
-		return nil, err
+	if !t.InstallApproved {
+		if err = a.confirm(fmt.Sprintf("Install signed %s on %s at %s, retaining any prior binary?", b.Manifest.Version, t.Server.SSHAlias, t.Server.RemoteBinary)); err != nil {
+			return nil, err
+		}
 	}
 	root, err := a.shell(ctx, t, `umask 077; mktemp -d "${TMPDIR:-/tmp}/tdev-install.XXXXXX"`)
 	if err != nil {

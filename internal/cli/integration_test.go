@@ -95,6 +95,11 @@ func terminalCLI(t *testing.T, binary, root, sshConfig string, args ...string) *
 	t.Helper()
 	cmd := exec.Command(binary, append([]string{"--config-dir", root, "--ssh-config", sshConfig}, args...)...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	return terminalCommand(t, cmd)
+}
+
+func terminalCommand(t *testing.T, cmd *exec.Cmd) *terminalProcess {
+	t.Helper()
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 100})
 	if err != nil {
 		t.Fatal(err)
@@ -282,6 +287,30 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 			t.Fatal(err)
 		}
 		v1 := signedRelease(t, binary, "0.1.0-dev", key)
+		t.Run("wizard_installs_missing_remote_and_discovers_projects", func(t *testing.T) {
+			clientRoot := t.TempDir()
+			destination := filepath.Join(t.TempDir(), "remote", "tdev")
+			before, err := os.ReadFile(filepath.Join(remoteRoot, "projects", "demo.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wizard := terminalCLI(t, binary, clientRoot, s.Config, "setup", "--interactive", "--remote-binary", destination, "--remote-config-dir", remoteRoot, "--release-dir", v1, "--public-key", filepath.Join(v1, "release.pub"))
+			wizard.waitText(t, "输入序号")
+			wizard.write(t, "1\r")
+			wizard.waitText(t, "给服务器起个名字")
+			wizard.write(t, "\r")
+			wizard.waitText(t, "安装官方签名版本到用户目录")
+			wizard.write(t, "y\r")
+			wizard.waitText(t, "已保存连接 fixture")
+			wizard.exit(t, 0)
+			after, err := os.ReadFile(filepath.Join(remoteRoot, "projects", "demo.yaml"))
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatal("setup altered existing remote project", err)
+			}
+			if err = update.Candidate(context.Background(), destination, "0.1.0-dev"); err != nil {
+				t.Fatal(err)
+			}
+		})
 		template, err := os.ReadFile("../../scripts/install.sh")
 		if err != nil {
 			t.Fatal(err)
@@ -293,12 +322,53 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 		if err = os.Mkdir(bootstrapHome, 0700); err != nil {
 			t.Fatal(err)
 		}
-		bootstrap := exec.Command("sh", filepath.Join(v1, "install.sh"), "--release-dir", v1, "--shell", "bash", "--config-dir", filepath.Join(bootstrapHome, "config"))
-		bootstrap.Env = append(os.Environ(), "HOME="+bootstrapHome, "OPENSSL=/nonexistent/openssl")
+		bootstrap := exec.Command("sh", filepath.Join(v1, "install.sh"), "--release-dir", v1, "--shell", "bash", "--completion", "all", "--config-dir", filepath.Join(bootstrapHome, "config"))
+		bootstrap.Env = append(os.Environ(), "HOME="+bootstrapHome, "ZDOTDIR="+bootstrapHome, "OPENSSL=/nonexistent/openssl")
 		if output, err := bootstrap.CombinedOutput(); err != nil {
 			t.Fatalf("pinned bootstrap without OpenSSL failed: %v %s", err, output)
 		}
 		installed := filepath.Join(bootstrapHome, ".local/bin/tdev")
+		for _, name := range []string{".bashrc", ".profile", ".zshrc"} {
+			content, err := os.ReadFile(filepath.Join(bootstrapHome, name))
+			if err != nil || !strings.Contains(string(content), "# >>> tdev completion >>>") {
+				t.Fatalf("bootstrap completion missing: %s %v", name, err)
+			}
+		}
+		t.Run("pipe_installer_completion_prompt", func(t *testing.T) {
+			for _, answer := range []string{"y", "n"} {
+				home := t.TempDir()
+				cmd := exec.Command("sh", "-c", `script=$1; shift; cat "$script" | sh -s -- "$@"`, "sh", filepath.Join(v1, "install.sh"), "--release-dir", v1, "--shell", "zsh", "--config-dir", filepath.Join(home, "config"))
+				cmd.Env = append(os.Environ(), "HOME="+home, "ZDOTDIR="+home, "TERM=xterm-256color")
+				installer := terminalCommand(t, cmd)
+				installer.waitText(t, "Configure zsh command completion?")
+				installer.write(t, answer+"\r")
+				installer.exit(t, 0)
+				content, err := os.ReadFile(filepath.Join(home, ".zshrc"))
+				if err != nil || strings.Contains(string(content), "# >>> tdev completion >>>") != (answer == "y") {
+					t.Fatalf("installer completion choice %s: %v", answer, err)
+				}
+			}
+		})
+		t.Run("binary_install_completion", func(t *testing.T) {
+			for _, mode := range []string{"all", "auto"} {
+				home := t.TempDir()
+				args := []string{"--config-dir", filepath.Join(home, "config"), "install", "--release-dir", v1, "--public-key", filepath.Join(v1, "release.pub"), "--destination", filepath.Join(home, ".local/bin/tdev"), "--completion", mode}
+				cmd := exec.Command(binary, args...)
+				cmd.Env = append(os.Environ(), "HOME="+home, "ZDOTDIR="+home, "SHELL=/bin/zsh", "TERM=xterm-256color")
+				if mode == "auto" {
+					installer := terminalCommand(t, cmd)
+					installer.waitText(t, "Configure zsh command completion?")
+					installer.write(t, "y\r")
+					installer.exit(t, 0)
+				} else if output, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("binary completion install: %v %s", err, output)
+				}
+				content, err := os.ReadFile(filepath.Join(home, ".zshrc"))
+				if err != nil || !strings.Contains(string(content), "# >>> tdev completion >>>") {
+					t.Fatalf("binary completion missing: %v", err)
+				}
+			}
+		})
 		if err = update.Candidate(context.Background(), installed, "0.1.0-dev"); err != nil {
 			t.Fatal(err)
 		}

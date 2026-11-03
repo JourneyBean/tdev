@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"go.yaml.in/yaml/v3"
 	"golang.org/x/term"
 	"tdev/internal/config"
 	"tdev/internal/protocol"
@@ -43,11 +42,12 @@ func (p policyPatch) apply(v reconnect.Policy) reconnect.Policy {
 }
 
 type server struct {
-	SSHAlias        string        `yaml:"ssh_alias"`
-	SSHConfig       string        `yaml:"ssh_config,omitempty"`
-	RemoteBinary    string        `yaml:"remote_binary"`
-	RemoteConfigDir string        `yaml:"remote_config_dir,omitempty"`
-	Reconnect       policyPatches `yaml:"reconnect,omitempty"`
+	SSHAlias        string                     `yaml:"ssh_alias"`
+	SSHConfig       string                     `yaml:"ssh_config,omitempty"`
+	RemoteBinary    string                     `yaml:"remote_binary"`
+	RemoteConfigDir string                     `yaml:"remote_config_dir,omitempty"`
+	Reconnect       policyPatches              `yaml:"reconnect,omitempty"`
+	Projects        map[string]projectOverride `yaml:"-"`
 }
 type preferences struct {
 	SchemaVersion int                `yaml:"schema_version"`
@@ -57,11 +57,12 @@ type preferences struct {
 	SSH           sshx.Options       `yaml:"ssh"`
 }
 type target struct {
-	Server        server
-	Name, Project string
-	Local, Batch  bool
-	SSH           sshx.Options
-	Reconnect     reconnect.Policies
+	Server          server
+	Name, Project   string
+	Local, Batch    bool
+	InstallApproved bool
+	SSH             sshx.Options
+	Reconnect       reconnect.Policies
 }
 
 func defaultPreferences() preferences {
@@ -98,11 +99,27 @@ func (a *app) prefs() (preferences, error) {
 		}
 	}
 	p.SSH.ConfigFile = a.sshConfig
+	overrides, err := a.readOverrides()
+	if err != nil {
+		return p, err
+	}
+	for name, s := range p.Servers {
+		s.Projects = overrides.Servers[name]
+		p.Servers[name] = s
+		if err = validateServer(name, s); err != nil {
+			return p, err
+		}
+	}
 	return p, nil
 }
 func validateServer(n string, s server) error {
 	if !config.ValidName(n) || sshx.CheckAlias(s.SSHAlias) != nil || s.RemoteBinary == "" || strings.HasPrefix(s.RemoteBinary, "-") || !config.SafeText(s.RemoteBinary) || !config.SafeText(s.RemoteConfigDir) || !config.SafeText(s.SSHConfig) {
 		return config.Invalid("invalid server name, SSH alias or remote binary")
+	}
+	for name, override := range s.Projects {
+		if !config.ValidName(name) || override.ProjectID == "" {
+			return config.Invalid("invalid local project override")
+		}
 	}
 	return nil
 }
@@ -309,108 +326,28 @@ func (a *app) client() {
 	a.transferCommands()
 	a.mountCommands()
 	a.updateCommands()
+	a.overrideCommand()
+	a.projectCommands()
 }
 func (a *app) setupCommand() {
-	c := a.command(a.root, "setup", "Register SSH connectivity and install/verify the remote binary", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
-		name, _ := c.Flags().GetString("name")
+	c := &cobra.Command{Use: "setup", Short: "Discover servers and remote projects with a connection wizard", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
+		wizard, _ := c.Flags().GetBool("interactive")
 		alias, _ := c.Flags().GetString("ssh-alias")
-		binary, _ := c.Flags().GetString("remote-binary")
-		remoteConfig, _ := c.Flags().GetString("remote-config-dir")
 		host, _ := c.Flags().GetString("host")
-		if alias == "" && host != "" {
-			alias = name
-			if alias == "" {
-				return nil, config.Invalid("--name is required when using --host")
-			}
+		wizard = wizard || (alias == "" && host == "")
+		result, err := a.runSetup(c.Context(), c)
+		if err == nil && wizard && !a.json {
+			return nil
 		}
-		if alias == "" {
-			fmt.Fprint(a.errOut, "Existing SSH alias: ")
-			if a.reader == nil {
-				a.reader = bufio.NewReader(a.in)
-			}
-			line, err := a.reader.ReadString('\n')
-			if err != nil && err != io.EOF {
-				return nil, err
-			}
-			alias = strings.TrimSpace(line)
-		}
-		if name == "" {
-			name = alias
-		}
-		s := server{SSHAlias: alias, RemoteBinary: binary, RemoteConfigDir: remoteConfig}
-		if err := validateServer(name, s); err != nil {
-			return nil, err
-		}
-		p := defaultPreferences()
-		if _, err := os.Stat(filepath.Join(a.store.Root, "client.yaml")); err == nil {
-			p, err = a.prefs()
-			if err != nil {
-				return nil, err
-			}
-		}
-		p.SSH.ConfigFile = a.sshConfig
-		var cleanup func()
-		var err error
-		s, cleanup, err = a.newConnection(c, s)
-		if err != nil {
-			return nil, err
-		}
-		keepConnection := false
-		defer func() {
-			if !keepConnection {
-				cleanup()
-			}
-		}()
-		if s.SSHConfig != "" {
-			p.SSH.ConfigFile = s.SSHConfig
-		}
-		if err = applySetupPolicies(c, &p); err != nil {
-			return nil, err
-		}
-		t := target{Server: s, SSH: p.SSH, Reconnect: p.Reconnect}
-		install, _ := c.Flags().GetBool("install")
-		if install {
-			if _, err := a.installRemote(ctx, t, c); err != nil {
-				return nil, err
-			}
-		}
-		if err := a.handshake(ctx, t, "session-v1", "attachment-v1"); err != nil {
-			return nil, err
-		}
-		if _, err := a.call(ctx, t, nil, "doctor"); err != nil {
-			return nil, err
-		}
-		unlock, err := a.store.Lock(ctx, "client", "config")
-		if err != nil {
-			return nil, err
-		}
-		defer unlock()
-		if _, err = os.Stat(filepath.Join(a.store.Root, "client.yaml")); err == nil {
-			p, err = a.prefs()
-			if err != nil {
-				return nil, err
-			}
-		}
-		if err = applySetupPolicies(c, &p); err != nil {
-			return nil, err
-		}
-		p.Servers[name] = s
-		p.DefaultServer = name
-		b, err := yaml.Marshal(p)
-		if err != nil {
-			return nil, err
-		}
-		if err = config.AtomicWrite(filepath.Join(a.store.Root, "client.yaml"), b, 0600); err != nil {
-			return nil, err
-		}
-		keepConnection = true
-		return map[string]string{"server": name, "ssh_alias": alias}, nil
-	})
+		return a.result(result, err)
+	}}
+	a.root.AddCommand(c)
 	c.Flags().String("name", "", "local server name")
 	c.Flags().String("ssh-alias", "", "existing SSH alias")
 	c.Flags().String("remote-binary", ".local/bin/tdev", "absolute or home-relative remote binary")
 	c.Flags().String("remote-config-dir", "", "optional remote configuration root")
 	c.Flags().Bool("install", false, "install a verified release on the remote before registration")
+	c.Flags().Bool("interactive", false, "use the connection wizard even when connection flags are provided")
 	releaseFlags(c)
 	setupConnectionFlags(c)
 }

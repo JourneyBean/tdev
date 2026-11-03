@@ -77,10 +77,15 @@ func Targets(home, shell, zdotdir, xdg string) ([]string, error) {
 }
 
 func Merge(original []byte, block string) ([]byte, error) {
+	return mergeBlock(original, block, "PATH")
+}
+
+func mergeBlock(original []byte, block, section string) ([]byte, error) {
+	start, end := "# >>> tdev "+section+" >>>", "# <<< tdev "+section+" <<<"
 	text := string(original)
 	a, b := strings.Index(text, start), strings.Index(text, end)
 	if (a < 0) != (b < 0) || (a >= 0 && (b < a || strings.Count(text, start) != 1 || strings.Count(text, end) != 1)) {
-		return nil, fmt.Errorf("PATH block markers are incomplete or duplicated; repair the tdev block first")
+		return nil, fmt.Errorf("%s block markers are incomplete or duplicated; repair the tdev block first", section)
 	}
 	managed := start + "\n" + block + "\n" + end
 	if a >= 0 {
@@ -93,7 +98,15 @@ func Merge(original []byte, block string) ([]byte, error) {
 }
 
 func Write(path, block string) (Change, error) {
+	return WriteBlock(path, block, "PATH")
+}
+
+// WriteBlock preserves independent managed sections in the same startup file.
+func WriteBlock(path, block, section string) (Change, error) {
 	change := Change{File: path}
+	if section != "PATH" && section != "completion" {
+		return change, fmt.Errorf("unsupported shell configuration section")
+	}
 	// Preserve a user's dotfile symlink rather than replacing the link itself.
 	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		path, err = filepath.EvalSymlinks(path)
@@ -119,7 +132,7 @@ func Write(path, block string) (Change, error) {
 		}
 		mode = info.Mode().Perm()
 	}
-	updated, err := Merge(original, block)
+	updated, err := mergeBlock(original, block, section)
 	if err != nil || bytes.Equal(original, updated) {
 		return change, err
 	}

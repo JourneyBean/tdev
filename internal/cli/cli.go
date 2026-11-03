@@ -18,7 +18,7 @@ import (
 	"tdev/internal/tmux"
 )
 
-var Version = "0.0.2"
+var Version = "0.0.3"
 
 type app struct {
 	root        *cobra.Command
@@ -50,6 +50,7 @@ func Execute(args []string, in io.Reader, out, errOut io.Writer) int {
 	a.local()
 	a.client()
 	a.pathCommand()
+	a.completionCommands()
 	r.SetArgs(args)
 	err := r.Execute()
 	if err == nil {
@@ -76,6 +77,9 @@ func (a *app) result(data any, err error) error {
 	}
 	if a.json {
 		return protocol.Write(a.out, data, nil)
+	}
+	if listing, ok := data.(projectListing); ok {
+		return listing.print(a.out)
 	}
 	enc := json.NewEncoder(a.out)
 	enc.SetIndent("", "  ")

@@ -15,31 +15,10 @@ import (
 
 func (a *app) workspaceCommands() {
 	ls := a.command(a.root, "ls", "List projects and live session status", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
-		p, err := a.prefs()
-		if err != nil {
-			return nil, err
-		}
-		all, _ := c.Flags().GetBool("all")
-		results := map[string]any{}
-		failures := map[string]string{}
-		for n := range p.Servers {
-			if !all && n != p.DefaultServer {
-				continue
-			}
-			t, _ := a.serverTarget(p, n, "")
-			data, err := a.call(ctx, t, nil, "project", "list", "--status")
-			if err != nil {
-				failures[n] = err.Error()
-			} else {
-				results[n] = data
-			}
-		}
-		if len(failures) > 0 {
-			return nil, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "some servers could not be listed", Details: map[string]any{"projects": results, "errors": failures}}
-		}
-		return results, nil
+		return a.listProjects(ctx, c)
 	})
 	ls.Flags().Bool("all", false, "query every configured server")
+	ls.Flags().String("server", "", "only list this saved server")
 	for _, op := range []string{"save", "stop", "sh"} {
 		op := op
 		c := a.command(a.root, op+" [project]", "Run project "+op, cobra.MaximumNArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
@@ -127,6 +106,23 @@ func (a *app) workspaceCommands() {
 			err = a.handshake(c.Context(), t, "attachment-v1")
 			if err == nil {
 				p, err = a.get(c.Context(), t)
+				if err != nil && protocol.Normalize(err).Code == "PROJECT_NOT_FOUND" {
+					fmt.Fprintf(a.errOut, "服务器 %s 上还没有项目 %s。\n", t.Name, t.Project)
+					create, promptErr := a.wizardYes(c.Context(), "现在配置并打开这个项目？", true)
+					if promptErr != nil {
+						return promptErr
+					}
+					if !create {
+						return err
+					}
+					p, err = a.createRemoteProject(c.Context(), t, "", true)
+					if err == nil {
+						fmt.Fprintln(a.errOut, "正在打开工作区…")
+					}
+				}
+			}
+			if err == nil {
+				p, err = a.effective(t, p)
 			}
 			if err == nil {
 				var data json.RawMessage

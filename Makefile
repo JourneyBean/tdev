@@ -1,5 +1,5 @@
 GO ?= go
-VERSION ?= 0.0.2
+VERSION ?= 0.0.3
 LDFLAGS = -X tdev/internal/cli.Version=$(VERSION)
 
 .PHONY: build test check cross release
@@ -16,9 +16,12 @@ check:
 	sh -n scripts/install.sh
 
 cross:
+	@mkdir -p dist
 	@set -eu; for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
 		os=$${platform%/*}; arch=$${platform#*/}; \
-		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -buildvcs=false -ldflags '$(LDFLAGS)' -o dist/tdev-$$os-$$arch ./cmd/tdev; \
+		candidate=$$(mktemp dist/.tdev-cross.XXXXXX); trap 'rm -f "$$candidate"' EXIT; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -buildvcs=false -ldflags '$(LDFLAGS)' -o "$$candidate" ./cmd/tdev; \
+		chmod 755 "$$candidate"; mv -f "$$candidate" dist/tdev-$$os-$$arch; \
 	done
 
 release: cross
