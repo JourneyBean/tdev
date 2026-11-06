@@ -14,7 +14,8 @@ import (
 )
 
 func (a *app) mountCommands() {
-	a.command(a.root, "mount <project> <local_path>", "Mount the project root using SSHFS", cobra.ExactArgs(2), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
+
+	a.command(a.root, "mount <project> [local_path]", "Mount the project root using SSHFS", cobra.RangeArgs(1, 2), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
 		t, err := a.resolve(ctx, args[0], false)
 		if err != nil {
 			return nil, err
@@ -23,25 +24,11 @@ func (a *app) mountCommands() {
 		if err != nil {
 			return nil, err
 		}
-		if err = a.handshake(ctx, t, "mount-probe-nfc-v1"); err != nil {
-			return nil, err
+		path := ""
+		if len(args) == 2 {
+			path = args[1]
 		}
-		return mount.New(a.store).Mount(ctx, t.Name, p.Name, p.ID, t.Server.SSHAlias, p.Directory, args[1], t.SSH, func(ctx context.Context, token string) error {
-			b, err := a.call(ctx, t, nil, "mount-probe", p.Name, "--token", token)
-			if err != nil {
-				return err
-			}
-			var result struct {
-				Created bool `json:"created"`
-			}
-			if err = json.Unmarshal(b, &result); err != nil {
-				return err
-			}
-			if result.Created {
-				return protocol.Fail("DEPENDENCY_MISSING", 7, "SSHFS backend did not suppress AppleDouble files; metadata guard verification failed")
-			}
-			return nil
-		})
+		return a.mountProject(ctx, t, p, path)
 	})
 	a.command(a.root, "unmount <project> [local_path]", "Unmount only an identity-matching managed mount, without force", cobra.RangeArgs(1, 2), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
 		t, err := a.resolve(ctx, args[0], false)
@@ -52,10 +39,67 @@ func (a *app) mountCommands() {
 		if len(args) == 2 {
 			path = args[1]
 		}
+		if t.Local {
+			return map[string]string{"status": "local"}, nil
+		}
 		return mount.New(a.store).Unmount(ctx, t.Name, t.Project, path)
 	})
 }
-func (a *app) localMountProbe(local *cobra.Command) {
+func (a *app) mountProject(ctx context.Context, t target, p config.Project, path string) (any, error) {
+	if t.Local {
+		return map[string]string{"status": "local", "directory": p.Directory}, nil
+	}
+	if path == "" {
+		path = t.Server.Projects[p.Name].MountPath
+	}
+	if path == "" {
+		if a.json || !terminalAvailable(a.in) {
+			return nil, config.Invalid("specify a mount directory or set tdev override --mount-path")
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		path, err = a.prompt(ctx, "本机挂载目录", filepath.Join(home, "tdev", t.Name, p.Name))
+		if err != nil {
+			return nil, err
+		}
+	}
+	var err error
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, err
+	}
+	result, err := mount.New(a.store).Mount(ctx, t.Name, p.Name, p.ID, t.Server.SSHAlias, p.Directory, path, t.SSH, func(ctx context.Context, token string) error {
+		b, err := a.call(ctx, t, nil, "mount-probe", p.Name, "--token", token)
+		if err != nil {
+			return err
+		}
+		var result struct {
+			Created bool `json:"created"`
+		}
+		if err = json.Unmarshal(b, &result); err != nil {
+			return err
+		}
+		if result.Created {
+			return protocol.Fail("DEPENDENCY_MISSING", 7, "SSHFS backend did not suppress AppleDouble files")
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	err = a.saveOverride(ctx, t, p, func(o *projectOverride) error { o.ProjectID = p.ID; o.MountPath = result.Path; return nil })
+	if err != nil {
+		return nil, protocol.Fail("PARTIAL_SUCCESS", 9, "mounted successfully; mount preference could not be saved: %v", err)
+	}
+	return result, nil
+}
+
+func (a *app) apiMountProbe(local *cobra.Command) {
 	c := a.command(local, "mount-probe <project>", "Inspect and remove only a unique tdev metadata probe", cobra.ExactArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
 		p, err := a.store.Get(args[0])
 		if err != nil {

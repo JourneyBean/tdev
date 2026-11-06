@@ -20,7 +20,7 @@ func TestClientProjectManagement(t *testing.T) {
 		t.Skip("private sshd integration runs on Linux")
 	}
 	s := testssh.Start(t)
-	binary := buildCLI(t, "0.0.3-dev")
+	binary := buildCLI(t, "0.1.0-dev")
 	root, remoteRoot := t.TempDir(), t.TempDir()
 	store := config.Store{Root: remoteRoot}
 	directory := filepath.Join(t.TempDir(), "中文 项目' $(false)")
@@ -37,10 +37,11 @@ func TestClientProjectManagement(t *testing.T) {
 	wizard.write(t, "y\r")
 	wizard.waitText(t, "项目名称（")
 	wizard.write(t, "my-awsome-project\r")
-	wizard.waitText(t, "远端已有项目目录（")
+	wizard.waitText(t, "项目目录（")
 	wizard.write(t, "/nonexistent-tdev-test-project\r")
-	wizard.waitText(t, "remote directory unavailable")
+	wizard.waitText(t, "project directory unavailable")
 	wizard.write(t, directory+"\r")
+	finishProjectWizard(t, wizard)
 	wizard.waitText(t, "已创建项目 fixture/my-awsome-project")
 	wizard.exit(t, 0)
 	p, err := store.Get("my-awsome-project")
@@ -54,45 +55,43 @@ func TestClientProjectManagement(t *testing.T) {
 		t.Helper()
 		executeBinary(t, binary, root, s.Config, input, exit, args...)
 	}
-	run("", 0, "project", "list", "--server", "fixture")
 	run("", 0, "ls", "--server", "fixture")
-	run("", 2, "project", "list", "--server", "missing")
+	run("", 0, "ls", "--server", "fixture")
+	run("", 2, "ls", "--server", "missing")
 	run("", 2, "create", "noninteractive")
 	run("", 0, "create", "fixture/second", "--directory", directory)
-	run("", 4, "project", "create", "fixture/second", "--directory", directory)
-	run("", 0, "project", "window", "add", "second", "--id", "api", "--name", "接口🙂", "--command", "printf '你好\\n'")
-	p, err = store.Get("second")
-	if err != nil || p.Windows[1].Name != "接口🙂" {
-		t.Fatal(p, err)
-	}
-	run("", 4, "project", "window", "remove", "second", "--id", "api", "--expected-revision", "1")
-	window := `{"id":"api","name":"后端","directory":".","command":"python manage.py runserver"}`
-	run(window, 0, "project", "window", "update", "second", "--id", "api", "--stdin")
-	run("", 0, "project", "forward", "add", "second", "-L", "8080:localhost:8000", "-R", "9000:localhost:3000")
+	run("", 4, "create", "fixture/second", "--directory", directory)
+	p, _ = store.Get("second")
+	p.Windows = append(p.Windows, config.Window{ID: "api", Name: "接口🙂", Directory: ".", Command: "printf '你好\\n'"})
+	draft, _ := json.Marshal(p)
+	run(string(draft), 0, "edit", "fixture/second", "--stdin", "--expected-revision", fmt.Sprint(p.Revision))
+	run(string(draft), 4, "edit", "fixture/second", "--stdin", "--expected-revision", fmt.Sprint(p.Revision))
+	run("", 0, "forward", "add", "second", "-L", "8080:localhost:8000", "-R", "9000:localhost:3000")
 	p, err = store.Get("second")
 	if err != nil || len(p.Forwards) != 2 || p.Forwards[1].Direction != "R" {
 		t.Fatal(p, err)
 	}
 	run("", 0, "override", "second", "--forward", p.Forwards[0].ID, "--local-port", "8081")
-	run("", 0, "project", "show", "second")
+	run("", 0, "show", "second")
 	newDirectory := t.TempDir()
-	run("", 0, "project", "update", "second", "--directory", newDirectory)
+	run("", 0, "edit", "second", "--directory", newDirectory)
 	p, _ = store.Get("second")
 	if p.Directory != newDirectory || p.Forwards[0].ListenPort != 8080 {
 		t.Fatal("update wrote client override", p)
 	}
 	p.Windows[1].Name = "新窗口"
 	encoded, _ := json.Marshal(p)
-	run(string(encoded), 0, "project", "update", "second", "--stdin", "--expected-revision", fmt.Sprint(p.Revision))
-	run(string(encoded), 4, "project", "update", "second", "--stdin", "--expected-revision", fmt.Sprint(p.Revision))
-	run("", 0, "project", "forward", "remove", "second", "--id", p.Forwards[1].ID)
-	run("", 0, "project", "window", "remove", "second", "--id", "api")
+	run(string(encoded), 0, "edit", "second", "--stdin", "--expected-revision", fmt.Sprint(p.Revision))
+	run(string(encoded), 4, "edit", "second", "--stdin", "--expected-revision", fmt.Sprint(p.Revision))
+	run("", 0, "forward", "remove", "second", "--id", p.Forwards[1].ID)
+
 	// The standalone wizard also targets an explicitly selected saved server.
 	create := terminalCLI(t, binary, root, s.Config, "create", "--server", "fixture")
 	create.waitText(t, "项目名称（")
 	create.write(t, "third\r")
-	create.waitText(t, "远端已有项目目录（")
+	create.waitText(t, "项目目录（")
 	create.write(t, directory+"\r")
+	finishProjectWizard(t, create)
 	create.waitText(t, "已创建项目 fixture/third")
 	create.exit(t, 0)
 	t.Run("open_guides_missing_project", func(t *testing.T) {
@@ -106,7 +105,7 @@ func TestClientProjectManagement(t *testing.T) {
 		cancelled := terminalCLI(t, binary, root, s.Config, "open", "cancelled")
 		cancelled.waitText(t, "现在配置并打开这个项目")
 		cancelled.write(t, "y\r")
-		cancelled.waitText(t, "远端已有项目目录（")
+		cancelled.waitText(t, "项目目录（")
 		cancelled.write(t, "\x03")
 		cancelled.exit(t, 130)
 		if _, err := store.Get("cancelled"); err == nil {
@@ -119,10 +118,11 @@ func TestClientProjectManagement(t *testing.T) {
 		opened := terminalCLI(t, binary, root, s.Config, "open", "fixture/from-open")
 		opened.waitText(t, "现在配置并打开这个项目")
 		opened.write(t, "y\r")
-		opened.waitText(t, "远端已有项目目录（")
+		opened.waitText(t, "项目目录（")
 		opened.write(t, directory+"\r")
+		finishProjectWizard(t, opened)
 		opened.waitText(t, "正在打开工作区")
-		opened.waitText(t, "shell*")
+		opened.waitText(t, "main*")
 		opened.write(t, "printf 'OPEN_CREATED_READY\\n'\r")
 		opened.waitText(t, "OPEN_CREATED_READY\r\n")
 		opened.write(t, "tmux detach-client\r")
@@ -152,11 +152,12 @@ func TestClientProjectManagement(t *testing.T) {
 		choose.waitText(t, "选择项目所在服务器")
 		choose.write(t, "missing\r")
 		choose.waitText(t, "请选择列表中的服务器")
-		choose.write(t, "1\r")
+		choose.write(t, "fixture\r")
 		choose.waitText(t, "项目名称（")
 		choose.write(t, "selected\r")
-		choose.waitText(t, "远端已有项目目录（")
+		choose.waitText(t, "项目目录（")
 		choose.write(t, directory+"\r")
+		finishProjectWizard(t, choose)
 		choose.waitText(t, "已创建项目 fixture/selected")
 		choose.exit(t, 0)
 		if _, err := store.Get("selected"); err != nil {
@@ -166,13 +167,15 @@ func TestClientProjectManagement(t *testing.T) {
 			t.Fatal("created on default server instead of selected server")
 		}
 		bare := terminalCLI(t, binary, root, s.Config, "create", "named")
-		bare.waitText(t, "选择项目所在服务器")
-		bare.write(t, "other\r")
-		bare.waitText(t, "远端已有项目目录（")
+		bare.waitText(t, "项目目录（")
 		bare.write(t, directory+"\r")
-		bare.waitText(t, "已创建项目 other/named")
+		finishProjectWizard(t, bare)
+		bare.waitText(t, "已创建项目 local/named")
 		bare.exit(t, 0)
-		run("", 2, "create", "unqualified", "--directory", directory)
+		if _, err := (config.Store{Root: root}).Get("named"); err != nil {
+			t.Fatal(err)
+		}
+		run("", 0, "create", "unqualified", "--directory", directory)
 		run("", 0, "create", "flagged", "--server", "fixture", "--directory", directory)
 		cancel := terminalCLI(t, binary, root, s.Config, "create")
 		cancel.waitText(t, "选择项目所在服务器")
@@ -180,8 +183,12 @@ func TestClientProjectManagement(t *testing.T) {
 		cancel.exit(t, 130)
 		a := &app{store: config.Store{Root: root}}
 		prefs, err := a.prefs()
-		if err != nil || prefs.DefaultServer != "other" {
-			t.Fatal("selection changed default server", err)
+		if err != nil || len(prefs.Servers) != 2 {
+			t.Fatal("selection changed registered servers", err)
+		}
+		stored, err := os.ReadFile(filepath.Join(root, "client.yaml"))
+		if err != nil || strings.Contains(string(stored), "default_server:") {
+			t.Fatal("setup persisted a default server", err)
 		}
 	})
 }

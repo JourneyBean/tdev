@@ -122,3 +122,44 @@ func TestRealForwardReadinessRecoveryAndConflict(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalForwardsDataConflictAndCancellation(t *testing.T) {
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		for {
+			conn, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer conn.Close(); io.Copy(conn, conn) }()
+		}
+	}()
+	f := config.Forward{ID: "local", Direction: "L", BindAddress: "127.0.0.1", ListenPort: freePort(t), TargetHost: "127.0.0.1", TargetPort: echo.Addr().(*net.TCPAddr).Port}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	group := StartLocal(ctx, []config.Forward{f})
+	defer group.Close()
+	waitState(t, group, "ready")
+	roundtrip(t, f.ListenPort)
+	conflict := StartLocal(ctx, []config.Forward{f})
+	defer conflict.Close()
+	for event := range conflict.Events {
+		if event.State == "failed" {
+			break
+		}
+	}
+	if conflict.Failure() == nil {
+		t.Fatal("conflicting listener was accepted")
+	}
+	roundtrip(t, f.ListenPort)
+	cancel()
+	group.Close()
+	if conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", fmtInt(f.ListenPort)), time.Second); err == nil {
+		conn.Close()
+		t.Fatal("local listener survived cancellation")
+	}
+}

@@ -24,9 +24,9 @@ tdev 是通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量�
 - save 保存启动配置和工作环境结构；运行中的进程由 tmux 会话维持。
 - 省略项目名时使用明确的 tmux 项目标记推断，并询问 yes/no；支持 -y 和标准输入确认。
 - 转发方向、参数语义与 OpenSSH 保持一致，-L 和 -R 均支持保存。
-- 保存 -R 时说明多客户端恢复可能产生远端端口占用冲突，由用户确认。
+- 反向映射明确监听位置和流量方向，说明多客户端可能争用远端监听。
 - 终端重连次数可设为 0、正整数或 always，间隔可配置；重连期间 Ctrl-C 退出。
-- 远端提供非交互 local 子命令，供客户端经 SSH 调用。
+- 远端提供非交互 api 子命令，供客户端经 SSH 调用。
 - 后续提供 http://demo.localhost:<固定代理端口> 形式的 HTTP 入口，其重连策略与终端独立。
 
 ### 1.2 用户价值
@@ -35,7 +35,7 @@ tdev 是通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量�
 
 ### 1.3 第一版范围
 
-交付 setup、ls、open、save、sh、forward、stop、push、pull、mount、unmount，以及对应的 local 接口、安装升级与必要诊断。优先支持 macOS/Linux 客户端及 Linux 远端，提供 amd64/arm64 产物；macOS 上的 local 能力应纳入基础验证。Windows 初期通过 WSL 使用，不承诺原生 Windows 支持。
+交付 setup、ls、open、save、sh、forward、stop、push、pull、mount、unmount，以及对应的 api 接口、安装升级与必要诊断。优先支持 macOS/Linux 客户端及 Linux 远端，提供 amd64/arm64 产物；macOS 上的本机能力应纳入基础验证。Windows 初期通过 WSL 使用，不承诺原生 Windows 支持。
 
 实现默认决策：第一版以窗口为主要编排单位。默认每个窗口一个 pane；遇到用户手工拆出的多 pane 窗口，save 必须明确报告尚不支持完整保存，不能静默丢失布局。可先拒绝该次保存并保留原配置。完整 pane 布局采集属于后续扩展。
 
@@ -46,7 +46,7 @@ tdev 是通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量�
 ```text
 本地 tdev
   ├─ setup、项目选择、用户确认
-  ├─ 系统 OpenSSH → 远端 tdev local → 配置文件与 tmux
+  ├─ 系统 OpenSSH → 远端 tdev api → 配置文件与 tmux
   ├─ 系统 OpenSSH -t → 远端 tmux attach
   ├─ 系统 OpenSSH -N → 端口转发
   ├─ 文件传输、SSHFS 挂载
@@ -58,25 +58,28 @@ tdev 是通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量�
 | 信息 | 权威位置 | 示例 |
 | --- | --- | --- |
 | 项目定义 | 远端 | 项目根目录、窗口、启动命令、保存转发 |
-| 连接与偏好 | 当前客户端 | SSH 别名、默认服务器、重连策略 |
+| 连接与偏好 | 当前客户端 | SSH 别名、客户端 override、重连策略 |
 | 临时运行状态 | 所在机器 | 客户端转发 PID、挂载点；远端 tmux session |
 
 项目定义以远端版本为准。私钥保留在本地或 SSH agent 中，连接偏好及挂载、转发状态由客户端管理。
 
-### 2.2 同一程序的两种入口
+### 2.2 用户入口与机器接口
 
-- tdev open 等面向人的命令提供简短交互。
-- tdev local … 只操作当前机器，不再次发起 SSH，不弹确认问题，不读取交互输入，除非明确要求 --stdin 读取结构化请求。
-- local 可以被人手工调用，但主要作为客户端的机器接口。
-- 正常的远端运行依赖只有 tdev、tmux、shell 和 SSH 服务；tdev 不监听远端 TCP 控制端口。
+用户命令直接操作项目，包含 create/show/edit、ls、open/save/sh/stop、forward、push/pull 与 mount/unmount。连接与安装工具保留独立入口。local 是内置服务器名，表示运行当前 tdev 的机器，无需 setup。
+
+`tdev api` 是客户端在目标机器上调用的机器接口，使用明确参数与结构化 stdin，操作当前机器，无业务确认。session attach 是要求终端和 attachment identity 的传输通道。API 按 project、session、transfer、binary 与 mount-probe 分组；窗口和转发定义通过 project get/set 更新。
+
+`--ssh-config`、`--yes` 属于用户入口；`--config-dir`、`--timeout` 和 `--json` 两层共用。远端依赖 tdev、tmux、shell 与系统 SSH 服务；tdev 不监听控制端口。
 
 ## 3 项目标识与上下文
 
 ### 3.1 项目定位
 
-实现默认决策：项目命令同时接受 project 和 server/project。project 使用客户端默认服务器；server 是本地注册的 SSH 别名映射名称。ls 默认列出默认服务器项目，ls --all 聚合全部已配置服务器；部分服务器不可达时仍显示可达结果并报告失败。
+项目接受完整的 server/project 标识。local/demo 指当前机器，dev/demo 指登记的远端服务器。裸名称先查本机，再按远端名称排序搜索，自动匹配后显示完整目标。发现索引命中的目标不可达时报告该目标的连接错误。缓存未命中时逐台读取指定项目定义，PROJECT_NOT_FOUND 继续查找，其他错误保留；目标解析独立于 tmux 状态。create 的裸名称默认本机，空参数向导先选择位置。
 
-项目名称建议约束为 `[A-Za-z0-9][A-Za-z0-9_-]*`，长度 1–64；禁止斜杠、点路径和控制字符。项目拥有独立稳定 UUID，显示名称可以与内部 session 名分离。tmux session 使用稳定 ID 派生的名字，避免 tmux target 模糊匹配。
+ls 默认查询本机和全部已配置远端，--server 限定范围，--all 与默认行为一致。终端先显示系统临时目录中的私有缓存和 syncing，再并发更新为 synced；会话名称或归属 warning 随项目展示，刷新成功。失败保留缓存和时间；连接失败显示 unreachable，旧 API 显示 upgrade-required，服务器应用错误显示 error。成功空结果清空对应快照。非终端与 JSON 返回一次最终结果；部分失败返回 9，error.details 保留各服务器结果。缓存仅供展示和发现，实际操作读取目标机器最新定义。
+
+项目名称建议约束为 `[A-Za-z0-9][A-Za-z0-9_-]*`，长度 1–64；禁止斜杠、点路径和控制字符。项目拥有独立稳定 UUID，显示名称可以与内部 session 名分离。tmux session 优先使用项目名称，稳定 UUID 存于 tmux 标记。状态查询按 UUID 查找，包括旧版或手工改名的会话；名称差异显示 warning。同名普通会话显示 unmanaged 和 warning，open 保留该会话并创建独立的 tdev-<UUID> 托管会话。多个会话具有同一项目 UUID 时，状态查询返回 warning，接管或停止操作需先确认归属。
 
 ### 3.2 tmux 标记
 
@@ -98,16 +101,20 @@ yes | tdev save
 
 | 命令 | 行为 |
 | --- | --- |
-| tdev setup | 交互配置连接、密钥认证、默认服务器和重连偏好；检查或安装远端 tdev |
-| tdev ls [--all] [--json] | 列出已保存项目和会话状态 |
-| tdev open <project> | 确保项目 session 存在，恢复保存转发，连接 tmux |
+| tdev setup | 交互配置连接、密钥认证和重连偏好；检查或安装远端 tdev |
+| tdev ls [--server NAME] [--json] | 遍历全部已配置服务器的项目和会话状态，可指定单台服务器 |
+| tdev create [server/project] | 创建项目，配置目录、启动窗口和映射 |
+| tdev show <project> | 显示定义、客户端 override 和生效配置 |
+| tdev edit <project> | 复用创建向导，预填现有值并检查 revision 保存 |
+| tdev open <name> [--mount] | 打开项目或恢复 scratch；项目恢复保存转发，--mount 用于项目挂载 |
 | tdev save [project] [-y] | 从运行会话保存窗口结构、目录和已知启动定义 |
-| tdev sh [project] [--save] [-y] | 新建项目 shell 窗口，可同时保存定义 |
-| tdev forward [project] … [--save] [-y] | 启动转发，按需保存 |
+| tdev sh [project] [--name NAME] [--save] [-y] | 新建项目 shell 窗口，可同时保存定义 |
+| tdev forward [project] [-L SPEC] [-R SPEC] | 启动保存的映射或本次临时映射 |
 | tdev stop [project] [-y] | 停止远端项目 session，保留项目配置 |
 | tdev push <project> <local_path> <remote_path> | 上传文件或目录 |
 | tdev pull <project> <remote_path> <local_path> | 下载文件或目录 |
-| tdev mount <project> <local_path> | 将项目远端根目录挂载到本地 |
+| tdev forward add/remove <project> | 管理保存的映射定义 |
+| tdev mount <project> [local_path] | 将项目远端根目录挂载到本地 |
 | tdev unmount <project> [<local_path>] | 安全卸载本客户端对应挂载 |
 | tdev doctor [project] [--json] | 检查二进制、SSH、tmux、配置和所需功能依赖 |
 | tdev version [--json] | 输出程序、协议和配置格式版本 |
@@ -134,10 +141,11 @@ doctor、version、unmount、upgrade 是实现默认补充接口。第一版不�
 1. 解析服务器与项目，检查远端协议兼容性，实时获取项目定义并合并本机 override。
 2. 调用 session ensure：存在则返回实际会话；不存在则按配置创建。
 3. 在本地建立保存的转发；冲突只影响对应入口，明确显示失败。
-4. 恢复终端状态，将交互终端交给系统 ssh -t 连接 tmux。
-5. 正常 detach 则结束该次 open；异常断线进入重连状态机。
+4. 指定 --mount 时挂载项目目录，复用本机 override 中的路径；未配置时询问。独立 mount/unmount 保留，open 退出后挂载保留。
+5. 恢复终端状态，本机直接连接 tmux，远端交给系统 ssh -t。
+6. 正常 detach 则结束该次 open；异常断线进入重连状态机。
 
-交互终端中，open 遇到尚未配置的项目时询问是否创建，填写远端已有目录后继续打开。拒绝保留 PROJECT_NOT_FOUND，Ctrl-C 取消；连接或配置错误按原错误返回。也可从客户端运行 `tdev create`。setup 发现零项目时提供立即创建入口。`project list/show/update`、`project window` 和 `project forward` 经 SSH 管理远端定义，复用原子写入、revision 和备份机制。本机端口偏好继续使用 override。
+交互终端中，open 遇到尚未配置的项目时询问是否创建，填写项目所在机器的已有目录、按需配置窗口与映射后继续打开，新项目默认窗口 main。拒绝保留 PROJECT_NOT_FOUND，Ctrl-C 取消；连接或配置错误按原错误返回。也可从客户端运行 `tdev create`。setup 发现零项目时提供立即创建入口。`ls/show/edit` 和 `forward add/remove` 管理项目定义，复用原子写入、revision 和备份机制。本机端口偏好继续使用 override。
 
 ensure 必须在并发客户端调用下幂等：不重复创建窗口，不重复执行启动命令。发现未完成初始化的 session 时返回可诊断状态，不盲目重新运行全部命令。可使用项目操作锁和初始化标记，成功启动每个窗口后记录完成状态；崩溃恢复采取显式修复，不追求未经确认的自动重放。
 
@@ -151,7 +159,7 @@ ensure 必须在并发客户端调用下幂等：不重复创建窗口，不重�
 - 普通新增 shell 窗口：保存成 shell 定义，不把当前运行程序误认为启动命令。
 - sh 创建且未带 --save 的窗口标记为临时，通用 save 默认排除；sh --save 创建持久窗口。
 - 用户自行创建的、无临时标记的单 pane 窗口可纳入保存，并展示变更摘要。
-- 将手工运行的程序变成启动命令，使用 local window add/update 的显式 command 字段。
+- 将手工运行的程序变成启动命令，通过 edit 向导显式填写启动命令。
 - 保留原有保存转发；不扫描客户端临时转发并自动收录。
 - 先生成变更并校验，再写入；冲突时不覆盖并发修改。
 
@@ -188,25 +196,22 @@ tdev forward demo -R 9000:3000
 tdev forward demo -L 8000
 tdev forward demo -R 9000
 
-# 连续设置；两种方向均可保存
-tdev forward demo -L 8000 -L 5173 -R 9000:3000 --save-remote
+# 连续保存定义；两种方向均支持
+tdev forward add demo -L 8000 -L 5173 -R 9000:3000
+tdev forward demo
 ```
 
 支持标准 TCP 形式 `[bind_address:]port:host:hostport`，IPv6 地址使用方括号。第一版不支持 -D、Unix socket forwarding 和远端动态分配监听端口 0；明确拒绝，不错误解析。端口范围 1–65535。默认监听回环地址，不自动开放到公网或修改服务端 GatewayPorts。
 
-`tdev forward 8000` 是 `tdev forward <当前项目> -L 8000` 的简写。无方向参数时默认为 -L；项目与端口简写的语法由端口规格识别，纯数字项目名在此处必须使用 server/project 消歧。
+项目参数始终解释为项目名称，纯数字名称同样适用。临时映射通过 -L/-R 显式传入；省略方向参数时使用项目保存的映射及当前客户端 override。
 
 当前项目自动匹配需要 tmux 标记。forward 的“本地”永远指运行 forward 的机器：在远端 tmux 中运行不会反向控制原来的笔记本。若当前机器没有连接目标信息，应要求显式 server/project，不能根据 SSH_CLIENT 猜测或尝试反连笔记本。
 
-### 5.2 保存
+### 5.2 保存与客户端覆盖
 
-- --save：将 -L 映射保存到本机 overrides.yaml；已有远端目标通过稳定 ID 覆盖本机监听端口。
-- --save-remote：显式保存到远端项目 YAML，供项目使用者共享，支持 -L 和 -R。
-- 保存 -R 前明确提示多个客户端可能争用同一远端端口，流量将到达成功建立映射的客户端。
-- -y 或标准输入 y/yes 接受该提示；后续 open 恢复已保存定义时不重复询问。
-- 保存请求先完整校验；无效参数不进行部分保存。
-- 实现默认决策：配置保存与当前建立连接分开报告。保存成功但端口被占用时，保留定义，返回部分失败，方便下次恢复。
-- 相同定义按稳定 ID/规范化内容去重，不重复添加。
+`forward add/remove` 管理项目所在机器的共享映射，保存前验证完整定义并检查 revision。`override --forward ID` 按稳定 ID 修改当前客户端的监听参数。create/edit 向导也可配置映射。
+
+`forward <项目>` 只负责建立和维持监听；显式 -L/-R 为临时映射。定义保存与监听运行分别操作。反向映射将流量送到成功建立监听的客户端，多客户端可能争用同一个远端端口。
 
 ### 5.3 第一版连接所有权
 
@@ -326,7 +331,6 @@ forwards:
 
 ```yaml
 schema_version: 1
-default_server: research
 servers:
   research:
     ssh_alias: research-host
@@ -365,7 +369,7 @@ servers:
 
 ### 7.3 写入与并发
 
-- local 修改接口取得项目锁，读取并校验 expected_revision，再生成新配置。
+- api 修改接口取得项目锁，读取并校验 expected_revision，再生成新配置。
 - 写同目录临时文件、校验、刷新后原子 rename；revision 增加。
 - revision 不匹配返回 CONFIG_CONFLICT 和当前 revision，不默认 last-write-wins。
 - 修改前保留受限权限的上一版本备份；配置迁移也需要备份和可解释的回退。
@@ -373,32 +377,27 @@ servers:
 - 多个字段的更新作为一个请求处理；错误不得产生半份配置。
 - save 应再次核对 session/window ID；布局在采集期间发生变化时可重试有限次数或报告冲突。
 
-## 8 远端 local 接口
-
-实现默认决策：采用按资源分组的子命令，保持稳定机器接口，不追求缩写。
+## 8 机器 API 与 shell 批次
 
 ```sh
-tdev local project list --json
-tdev local project create demo --directory /home/developer/projects/demo --json
-tdev local config get demo --json
-tdev local config set demo --stdin --expected-revision 3 --json
-
-tdev local window add demo --name api --command 'uv run python -m app' --json
-tdev local window update demo --id api --stdin --expected-revision 3 --json
-tdev local window remove demo --id api --expected-revision 3 --json
-tdev local forward add demo -L 8000 --json
-tdev local forward remove demo --id web --expected-revision 3 --json
-
-tdev local session ensure demo --json
-tdev local session status demo --json
-tdev local session save demo --expected-revision 3 --json
-tdev local session stop demo --json
-tdev local session add-window demo --name shell --temporary --json
-tdev local context --json
-tdev version --json
+tdev --json version
+tdev --json api version --require api-v1
+tdev --json api project list --status
+tdev --json api project create demo --directory /home/developer/projects/demo
+tdev --json api project create demo --stdin < draft.json
+tdev --json api project get demo
+tdev --json api project set demo --stdin --expected-revision 3 < definition.json
+tdev --json api session ensure demo
+tdev --json api session status demo
+tdev --json api session save demo --expected-revision 3
+tdev --json api session stop demo
+tdev --json api session add-window demo --name debug --temporary
+tdev --json api session context
 ```
 
-window add/update/remove 修改保存定义，不偷偷修改运行 session。session add-window 修改运行窗口；sh --save 组合运行变更与配置变更，并明确处理部分成功。所有配置修改接口均支持 expected_revision，示例中未全部展开。
+完整项目草稿收集并验证后，通过 create --stdin 一次写入。project set 更新已保存定义，修改检查 revision。session add-window 修改运行中的窗口，sh --save 组合运行和定义变更并报告部分成功。新 shell 默认叫 shell，支持 --name。
+
+客户端用一次 SSH shell 调用顺序执行顶层 version、api version 能力检查与所需操作。每段输出以请求专属的随机标记和退出码分隔，客户端严格解析；诊断走 stderr，stdin 保留给实际写操作。API gate 失败即停止后续操作并显示服务端版本与升级指引。独立查询合并进同一批次，需要用户确认或依赖前一步结果的流程分阶段执行。API 保持普通子命令，不增加请求封装，不依赖 jq。旧 local 入口移除，旧服务端需要升级。
 
 结构化输出示例：
 
@@ -432,7 +431,7 @@ setup 的交互结束后恢复本地终端模式，再连接。交互期间不�
 
 push/pull 先采用系统 OpenSSH 配套的 scp/SFTP 能力，不额外要求 rsync。明确区分文件和目录，禁止隐式删除目标多余文件。实现默认决策：remote_path 相对路径以项目根目录为基准，绝对路径按用户输入处理；local_path 相对本地 cwd。禁止通过 shell eval 展开用户路径。
 
-目的路径精确解释为目标文件或目标目录，目录上传表示将源目录内容复制到指定目标目录；不得随着目标是否已存在而产生不同层级。底层工具不天然符合该语义时需封装或显式报错。已有目标文件覆盖需确认，提供 -y；中断/部分上传必须非零退出并指出可能残留，不能承诺整个目录传输原子性。
+单文件复制到已有目录时，先将源文件名追加到目录路径，得到精确文件目标；显式目标文件名支持重命名。目录上传表示将源目录内容复制到指定目标目录；不得随着目标是否已存在而产生不同层级。底层工具不天然符合该语义时需封装或显式报错。已有目标文件覆盖需确认，提供 -y；中断/部分上传必须非零退出并指出可能残留，不能承诺整个目录传输原子性。
 
 mount 使用项目远端根目录作为来源。挂载前检查 SSHFS 依赖、挂载记录与目录内容；正确来源可复用，其他来源或非空未挂载目录拒绝覆盖。记录实际挂载来源，unmount 有多个候选时要求指定 local_path。busy 时报告占用，不默认强制卸载。
 
@@ -528,7 +527,7 @@ GoReleaser 可负责产物组织和发布；安装器、签名验证、远端部
 ## 15 开发顺序与交接要求
 
 1. 建立 Go 项目、CLI 骨架、版本协议、配置 schema、原子保存与 revision。
-2. 实现 local 项目/窗口配置与 tmux session 操作，验证并发 ensure 和 save 规则。
+2. 实现 api 项目配置与 tmux session 操作，验证并发 ensure 和 save 规则。
 3. 实现 setup、ls、open、sh、save、stop 与原生终端接管。
 4. 实现重连状态机、退出分类与 Ctrl-C 行为，先验证终端恢复。
 5. 实现 -L/-R 转发、保存及多客户端冲突处理。
@@ -552,3 +551,11 @@ GoReleaser 可负责产物组织和发布；安装器、签名验证、远端部
 - [GoReleaser](https://goreleaser.com/getting-started/intro/)：跨平台发布与校验产物。
 
 参考资料来自设计阶段文档调研。开发时应固定依赖版本并核验当前官方接口。
+
+## 独立临时会话
+
+`tdev scratch [server]` 创建并进入独立 tmux session。`local` 为本机，其他目标取自客户端登记的服务器。省略目标且仅有本机可用时直接使用本机，否则显示服务器选择器。`--name` 设置逻辑名称，默认生成唯一名称；`--dir` 设置目标机器上的绝对路径或 home 相对路径，默认 home。重名创建返回 SESSION_CONFLICT。JSON 调用创建会话并返回身份，不附着终端。恢复统一使用 `tdev open <name>` 或 `tdev open <server>/<name>`。open 按本机、缓存索引、实时远端查询定位目标，选择目标后重新验证实际会话。项目与 scratch 在同一服务器同名时返回 SESSION_CONFLICT；缓存中已结束的 scratch 返回 SESSION_NOT_FOUND；完全未知的名称沿用项目创建向导。scratch 的 open 直接附着，`--mount` 仅适用于项目。
+
+临时会话使用独立 tmux 归属标记与 `tdev-scratch-` 名称前缀，独立于项目定义、启动配置、转发及 save。detach 和传输断线保留运行进程，最后一个窗口退出时结束。重连只进入匹配原 session ID 与 generation 的会话。
+
+`ls` 默认展示项目和 scratch，支持 `--type project|scratch` 与现有 `--server` 筛选。scratch 从实际 tmux 标记发现，跟随列表缓存和离线状态展示；成功刷新后移除已结束的会话。JSON 保留 projects 数组，并增加 scratches 数组。机器接口 `api scratch create|list|status|attach|attachment` 使用 `scratch-v1` 能力门禁，旧服务器保留项目列表并给出 scratch 升级提示。

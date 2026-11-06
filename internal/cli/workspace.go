@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/spf13/cobra"
@@ -14,10 +15,12 @@ import (
 )
 
 func (a *app) workspaceCommands() {
-	ls := a.command(a.root, "ls", "List projects and live session status", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
+	a.scratchCommand()
+	ls := a.command(a.root, "ls", "List projects and scratch sessions across configured servers", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
 		return a.listProjects(ctx, c)
 	})
-	ls.Flags().Bool("all", false, "query every configured server")
+	ls.Flags().String("type", "", "filter by project or scratch")
+	ls.Flags().Bool("all", false, "query every configured server (the default)")
 	ls.Flags().String("server", "", "only list this saved server")
 	for _, op := range []string{"save", "stop", "sh"} {
 		op := op
@@ -35,39 +38,43 @@ func (a *app) workspaceCommands() {
 					return nil, err
 				}
 			}
-			p, err := a.get(ctx, t)
-			if err != nil {
-				return nil, err
+			p := config.Project{Name: t.Project}
+			if op == "save" {
+				p, err = a.get(ctx, t)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if op == "sh" {
-				if !t.Local && !a.json && !terminalAvailable(a.in) {
+				if !a.json && !terminalAvailable(a.in) {
 					return nil, config.Invalid("sh requires a terminal; --json creates a window without attaching")
 				}
 				save, _ := c.Flags().GetBool("save")
-				argv := []string{"session", "add-window", p.Name, "--name", "shell"}
+				name, _ := c.Flags().GetString("name")
+				argv := []string{"session", "add-window", p.Name, "--name", name}
 				if !save {
 					argv = append(argv, "--temporary")
 				}
-				data, err := a.call(ctx, t, nil, argv...)
+				operations := [][]string{argv}
+				if !a.json && !(t.Local && os.Getenv("TMUX") != "") {
+					operations = append(operations, []string{"session", "status", p.Name})
+				}
+				data, err := a.calls(ctx, t, nil, operations...)
 				if err != nil {
 					return nil, err
 				}
 				var w map[string]string
-				if err = json.Unmarshal(data, &w); err != nil {
+				if err = json.Unmarshal(data[0], &w); err != nil {
 					return nil, err
 				}
-				if t.Local {
+				if t.Local && !a.json && os.Getenv("TMUX") != "" {
 					return w, a.manager().Select(ctx, w["window_id"])
 				}
 				if a.json {
 					return w, nil
 				}
-				b, err := a.call(ctx, t, nil, "session", "status", p.Name)
-				if err != nil {
-					return nil, err
-				}
 				var s tmux.Status
-				if err = json.Unmarshal(b, &s); err != nil {
+				if err = json.Unmarshal(data[1], &s); err != nil {
 					return nil, err
 				}
 				policy, err := commandPolicy(c, t.Reconnect.Terminal)
@@ -84,14 +91,15 @@ func (a *app) workspaceCommands() {
 		})
 		if op == "sh" {
 			c.Flags().Bool("save", false, "persist the new shell definition")
+			c.Flags().String("name", "shell", "name of the new tmux window")
 			retryFlags(c)
 		}
 	}
-	open := &cobra.Command{Use: "open <project>", Short: "Ensure, restore saved forwarding and attach the workspace", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+	open := &cobra.Command{Use: "open <name>", Short: "Open a project workspace or an existing scratch session", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
 		if a.json || !terminalAvailable(a.in) {
 			return config.Invalid("open requires an interactive terminal")
 		}
-		t, err := a.resolve(c.Context(), args[0], false)
+		t, err := a.resolveOpen(c.Context(), args[0])
 		if err != nil {
 			return err
 		}
@@ -103,9 +111,24 @@ func (a *app) workspaceCommands() {
 		var p config.Project
 		var s tmux.Status
 		for {
-			err = a.handshake(c.Context(), t, "attachment-v1")
-			if err == nil {
+			{
 				p, err = a.get(c.Context(), t)
+				if err == nil || protocol.Normalize(err).Code == "PROJECT_NOT_FOUND" {
+					scratch, scratchErr := a.findScratch(c.Context(), t)
+					if scratchErr != nil {
+						err = scratchErr
+					} else if scratch != nil {
+						if err == nil {
+							return protocol.Fail("SESSION_CONFLICT", 4, "%s/%s matches both a project and a scratch; rename one before opening", t.Name, t.Project)
+						}
+						t.Scratch = true
+						s = scratch.Status
+						break
+					} else if t.Scratch {
+						return protocol.Fail("SESSION_NOT_FOUND", 5, "scratch session ended; refresh with tdev ls")
+					}
+				}
+
 				if err != nil && protocol.Normalize(err).Code == "PROJECT_NOT_FOUND" {
 					fmt.Fprintf(a.errOut, "服务器 %s 上还没有项目 %s。\n", t.Name, t.Project)
 					create, promptErr := a.wizardYes(c.Context(), "现在配置并打开这个项目？", true)
@@ -117,6 +140,14 @@ func (a *app) workspaceCommands() {
 					}
 					p, err = a.createRemoteProject(c.Context(), t, "", true)
 					if err == nil {
+						prefs, e := a.prefs()
+						if e != nil {
+							return e
+						}
+						t, e = a.serverTarget(prefs, t.Name, p.Name)
+						if e != nil {
+							return e
+						}
 						fmt.Fprintln(a.errOut, "正在打开工作区…")
 					}
 				}
@@ -143,19 +174,58 @@ func (a *app) workspaceCommands() {
 			}
 			t.Batch = true
 		}
+		if t.Scratch {
+			doMount, _ := c.Flags().GetBool("mount")
+			if doMount {
+				return config.Invalid("--mount requires a project")
+			}
+			if out, ok := a.out.(*os.File); ok && terminalAvailable(out) {
+				if _, err = fmt.Fprintf(out, "\x1b]2;tdev: %s/%s\x07", t.Name, t.Project); err != nil {
+					return err
+				}
+			}
+			return a.attach(c.Context(), t, s, "", budget)
+		}
+		if s.Warning != "" {
+			fmt.Fprintf(a.errOut, "warning: %s\n", s.Warning)
+		}
+		doMount, _ := c.Flags().GetBool("mount")
+		if doMount {
+			if _, err = a.mountProject(c.Context(), t, p, ""); err != nil {
+				return err
+			}
+		}
 		closeForwards, err := a.openForwards(c.Context(), t, p.Forwards)
 		if err != nil {
 			return err
 		}
 		defer closeForwards()
+		if out, ok := a.out.(*os.File); ok && terminalAvailable(out) {
+			if _, err = fmt.Fprintf(out, "\x1b]2;tdev: %s/%s\x07", t.Name, t.Project); err != nil {
+				return err
+			}
+		}
 		return a.attach(c.Context(), t, s, "", budget)
 	}}
 	a.root.AddCommand(open)
 	retryFlags(open)
-	doctor := a.command(a.root, "doctor [project]", "Check client/remote versions and optional dependencies", cobra.MaximumNArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
+	open.Flags().Bool("mount", false, "mount the project directory before attaching")
+	doctor := a.command(a.root, "doctor [project]", "Diagnose project warnings, versions and dependencies", cobra.MaximumNArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
 		local := a.clientDoctor()
 		if len(args) == 0 {
-			return local, nil
+			listing, err := a.refreshProjects(ctx, c, false)
+			report := map[string]any{"client": local, "servers": listing}
+			if err != nil {
+				if !a.json {
+					if writeErr := a.result(report, nil); writeErr != nil {
+						return nil, writeErr
+					}
+				}
+				failure := protocol.Normalize(err)
+				failure.Details = report
+				return report, failure
+			}
+			return report, nil
 		}
 		t, err := a.resolve(ctx, args[0], false)
 		if err != nil {
@@ -165,7 +235,16 @@ func (a *app) workspaceCommands() {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"client": local, "remote": remote}, nil
+		projects, err := a.discover(ctx, t)
+		if err != nil {
+			return map[string]any{"client": local, "remote": remote, "project_error": protocol.Normalize(err)}, nil
+		}
+		for _, project := range projects {
+			if project.Project.Name == t.Project {
+				return map[string]any{"client": local, "remote": remote, "project": project}, nil
+			}
+		}
+		return nil, protocol.Fail("PROJECT_NOT_FOUND", 3, "project %q does not exist", t.Project)
 	})
 	_ = doctor
 }

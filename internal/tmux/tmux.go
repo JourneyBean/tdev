@@ -23,13 +23,14 @@ type Status struct {
 	SessionID   string `json:"session_id,omitempty"`
 	SessionName string `json:"session_name,omitempty"`
 	Generation  string `json:"generation,omitempty"`
+	Warning     string `json:"warning,omitempty"`
 }
 type LiveWindow struct {
 	ID, Name, Directory, WindowID, Persist string
 	Panes                                  int
 }
 
-func SessionName(p config.Project) string { return "tdev-" + strings.ReplaceAll(p.ID, "-", "") }
+func SessionName(p config.Project) string { return p.Name }
 func Quote(s string) string               { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 func (m Manager) Args(args ...string) []string {
 	if m.Socket != "" {
@@ -53,7 +54,7 @@ func (m Manager) run(ctx context.Context, args ...string) (string, error) {
 func (m Manager) Status(ctx context.Context, p config.Project) (Status, error) {
 	s := Status{Project: p.Name, Status: "missing"}
 	name := SessionName(p)
-	out, err := m.run(ctx, "list-sessions", "-F", "#{session_name}")
+	out, err := m.run(ctx, "list-sessions", "-F", "#{session_id}\t#{@tdev_project_id}\t#{@tdev_initialization}\t#{@tdev_generation}\t#{session_name}")
 	if err != nil {
 		// Only the documented no-server conditions mean missing; socket/permission failures remain errors.
 		msg := err.Error()
@@ -62,32 +63,46 @@ func (m Manager) Status(ctx context.Context, p config.Project) (Status, error) {
 		}
 		return s, err
 	}
-	found := false
-	for _, n := range strings.Split(out, "\n") {
-		if n == name {
-			found = true
+	var owned []string
+	var occupied string
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.SplitN(line, "\t", 5)
+		if len(fields) != 5 {
+			return s, fmt.Errorf("invalid tmux session metadata")
+		}
+		if fields[4] == name && fields[1] != p.ID {
+			occupied = fields[0]
+		}
+		if fields[1] == p.ID {
+			if owned != nil {
+				s.Status = "unmanaged"
+				s.Warning = "multiple tmux sessions carry this project's UUID; inspect their ownership"
+				return s, nil
+			}
+			owned = fields
 		}
 	}
-	if !found {
-		return s, nil
-	}
-	out, err = m.run(ctx, "display-message", "-p", "-t", name+":", "#{session_id}\t#{@tdev_project_id}\t#{@tdev_initialization}\t#{@tdev_generation}")
-	if err != nil {
-		return s, err
-	}
-	fields := strings.Split(out, "\t")
-	if len(fields) != 4 || fields[1] != p.ID {
-		return s, protocol.Fail("SESSION_CONFLICT", 4, "session identity mismatch for %s (metadata %q)", p.ID, out)
-	}
-	s.SessionID = fields[0]
-	s.SessionName = name
-	s.Generation = fields[3]
-	s.Status = "running"
-	if fields[2] != "ready" {
-		s.Status = "incomplete"
+	if owned != nil {
+		s.SessionID, s.Generation, s.SessionName = owned[0], owned[3], owned[4]
+		s.Status = "running"
+		if owned[2] != "ready" {
+			s.Status = "incomplete"
+		}
+		if s.SessionName != name {
+			s.Warning = fmt.Sprintf("project session is named %q; expected %q; matched by project UUID", s.SessionName, name)
+		}
+	} else if occupied != "" {
+		s.Status = "unmanaged"
+		s.SessionName = name
+		s.Warning = fmt.Sprintf("tmux session %q (%s) has no matching project UUID; existing session preserved", name, occupied)
 	}
 	return s, nil
 }
+
+func unmanagedSession(s Status) error {
+	return protocol.Fail("SESSION_UNMANAGED", 4, "%s; inspect the existing sessions before running this operation", s.Warning)
+}
+
 func (m Manager) Require(ctx context.Context, p config.Project) (Status, error) {
 	s, err := m.Status(ctx, p)
 	if err != nil {
@@ -95,6 +110,9 @@ func (m Manager) Require(ctx context.Context, p config.Project) (Status, error) 
 	}
 	if s.Status == "missing" {
 		return s, protocol.Fail("SESSION_NOT_FOUND", 5, "project session is missing; run open first")
+	}
+	if s.Status == "unmanaged" {
+		return s, unmanagedSession(s)
 	}
 	if s.Status != "running" {
 		return s, protocol.Fail("SESSION_INCOMPLETE", 1, "session initialization is incomplete; inspect it before stopping and recreating")
@@ -111,7 +129,11 @@ func (m Manager) Ensure(ctx context.Context, p config.Project) (Status, error) {
 	if err != nil {
 		return s, err
 	}
-	if s.Status != "missing" {
+	name := SessionName(p)
+	if s.Status == "unmanaged" && s.SessionName == name {
+		// Keep an unrelated same-name session and create a separate owned session.
+		name = "tdev-" + strings.ReplaceAll(p.ID, "-", "")
+	} else if s.Status != "missing" {
 		if s.Status == "running" && s.Generation == "" {
 			if _, err = m.run(ctx, "set-option", "-t", s.SessionID, "@tdev_generation", config.NewID()); err != nil {
 				return s, err
@@ -126,7 +148,6 @@ func (m Manager) Ensure(ctx context.Context, p config.Project) (Status, error) {
 			return s, config.Invalid("window directory missing: %s", config.WindowPath(p, w))
 		}
 	}
-	name := SessionName(p)
 	id, err := m.run(ctx, "new-session", "-d", "-P", "-F", "#{session_id}", "-s", name, "-n", p.Windows[0].Name, "-c", config.WindowPath(p, p.Windows[0]))
 	if err != nil {
 		return s, err
@@ -192,6 +213,9 @@ func (m Manager) Stop(ctx context.Context, p config.Project) (Status, error) {
 	}
 	if s.Status == "missing" {
 		return s, nil
+	}
+	if s.Status == "unmanaged" {
+		return s, unmanagedSession(s)
 	}
 	_, err = m.run(ctx, "kill-session", "-t", s.SessionID)
 	if err != nil {

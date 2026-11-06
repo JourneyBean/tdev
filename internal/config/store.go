@@ -137,7 +137,16 @@ func AtomicWrite(path string, data []byte, mode os.FileMode) error {
 	return d.Sync()
 }
 func (s Store) Create(ctx context.Context, name, dir string) (Project, error) {
-	p := Project{SchemaVersion: 1, Revision: 1, ID: NewID(), Name: name, Windows: []Window{{ID: "shell", Name: "shell", Directory: "."}}, Forwards: []Forward{}}
+	p := Project{SchemaVersion: 1, Revision: 1, ID: NewID(), Name: name, Windows: []Window{{ID: "main", Name: "main", Directory: "."}}, Forwards: []Forward{}, Directory: dir}
+	return s.CreateDefinition(ctx, p)
+}
+
+// CreateDefinition validates the complete draft before creating any configuration.
+func (s Store) CreateDefinition(ctx context.Context, p Project) (Project, error) {
+	name, dir := p.Name, p.Directory
+	if p.Revision != 1 {
+		return p, Invalid("new project revision must be 1")
+	}
 	var err error
 	p.Directory, err = filepath.Abs(dir)
 	if err != nil {

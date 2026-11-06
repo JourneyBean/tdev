@@ -195,6 +195,32 @@ func noLinks(path string) error {
 	}
 	return nil
 }
+
+// PlanCopyDestination accepts an existing directory for a single-file copy.
+// Directory sources retain the exact contents-merge semantics of PlanDestination.
+func PlanCopyDestination(ctx context.Context, destination, sourceName string, m Manifest) (Plan, error) {
+	if err := m.Validate(); err != nil {
+		return Plan{}, err
+	}
+	if !m.Entries[0].Directory {
+		if sourceName == "" || sourceName == "." || sourceName == ".." || filepath.Base(sourceName) != sourceName || !config.SafeText(sourceName) {
+			return Plan{}, fail("source filename must be a single path component")
+		}
+		path, err := Canonical(destination)
+		if err != nil {
+			return Plan{}, err
+		}
+		snapshot, err := SnapshotPath(path)
+		if err != nil {
+			return Plan{}, err
+		}
+		if snapshot.Kind == "directory" {
+			destination = filepath.Join(path, sourceName)
+		}
+	}
+	return PlanDestination(ctx, destination, m)
+}
+
 func PlanDestination(ctx context.Context, destination string, m Manifest) (Plan, error) {
 	p := Plan{Manifest: m}
 	if err := nativeAliases(m); err != nil {

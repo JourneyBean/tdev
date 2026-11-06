@@ -27,28 +27,31 @@ func run(t *testing.T, root, input string, args ...string) (int, protocol.Respon
 func TestProtocolAndRevisionConflict(t *testing.T) {
 	root := t.TempDir()
 	dir := t.TempDir()
-	code, r := run(t, root, "", "local", "project", "create", "demo", "--directory", dir)
+	code, r := run(t, root, "", "api", "project", "create", "demo", "--directory", dir)
 	if code != 0 || !r.OK {
 		t.Fatalf("%d %+v", code, r)
 	}
-	code, r = run(t, root, "", "local", "window", "add", "demo", "--name", "api", "--expected-revision", "99")
+	p, _ := (config.Store{Root: root}).Get("demo")
+	p.Revision = 99
+	input, _ := json.Marshal(p)
+	code, r = run(t, root, string(input), "api", "project", "set", "demo", "--stdin", "--expected-revision", "99")
 	if code != 4 || r.Error.Code != "CONFIG_CONFLICT" {
 		t.Fatalf("%d %+v", code, r)
 	}
-	code, r = run(t, root, "", "local", "project", "create", "../oops", "--directory", dir)
+	code, r = run(t, root, "", "api", "project", "create", "../oops", "--directory", dir)
 	if code != 2 || r.OK {
 		t.Fatalf("%d %+v", code, r)
 	}
-	code, r = run(t, root, "", "local", "config", "get", "missing")
+	code, r = run(t, root, "", "api", "project", "get", "missing")
 	if code != 3 || r.Error.Code != "PROJECT_NOT_FOUND" {
 		t.Fatalf("%d %+v", code, r)
 	}
 }
 func TestInvalidBatchDoesNotPartiallySave(t *testing.T) {
 	root := t.TempDir()
-	run(t, root, "", "local", "project", "create", "demo", "--directory", t.TempDir())
+	run(t, root, "", "api", "project", "create", "demo", "--directory", t.TempDir())
 	before, _ := os.ReadFile(filepath.Join(root, "projects", "demo.yaml"))
-	code, r := run(t, root, "", "local", "forward", "add", "demo", "-L", "8000", "-R", "0")
+	code, r := run(t, root, "", "forward", "add", "local/demo", "-L", "8000", "-R", "0")
 	if code != 2 || r.OK {
 		t.Fatalf("%d %+v", code, r)
 	}
@@ -58,8 +61,8 @@ func TestInvalidBatchDoesNotPartiallySave(t *testing.T) {
 	}
 }
 func TestRemoteQuoting(t *testing.T) {
-	s := remoteCommand(target{Server: server{RemoteBinary: "/home/user/a b/tdev"}}, "local", "config", "get", "a'$(false)")
-	if s != "'/home/user/a b/tdev' 'local' 'config' 'get' 'a'\"'\"'$(false)'" {
+	s := remoteCommand(target{Server: server{RemoteBinary: "/home/user/a b/tdev"}}, "api", "project", "get", "a'$(false)")
+	if s != "'/home/user/a b/tdev' 'api' 'project' 'get' 'a'\"'\"'$(false)'" {
 		t.Fatal(s)
 	}
 }
@@ -70,7 +73,7 @@ func TestConfirmFromPipeAndNoInput(t *testing.T) {
 	}{{"yes\n", true}, {"y\n", true}, {"", false}, {"no\n", false}} {
 		a := &app{in: strings.NewReader(tc.input), errOut: &bytes.Buffer{}}
 		a.root = &cobra.Command{}
-		a.root.PersistentFlags().Bool("yes", false, "")
+		a.root.Flags().Bool("yes", false, "")
 		err := a.confirm("test")
 		if (err == nil) != tc.accept {
 			t.Fatalf("%q %v", tc.input, err)

@@ -71,25 +71,6 @@ func TestMergeRejectsStaleMissingReverseAndCollisions(t *testing.T) {
 	}
 }
 
-func TestSaveForwardUsesClientOverride(t *testing.T) {
-	p := overrideFixture(t)
-	o := projectOverride{}
-	f, err := config.ParseForward("L", "8080:localhost:8000")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = saveLocalForwards(p, &o, []config.Forward{f}); err != nil {
-		t.Fatal(err)
-	}
-	if *o.Forwards["api"].ListenPort != 8080 || len(o.LocalForwards) != 0 || p.Forwards[0].ListenPort != 3000 {
-		t.Fatal(o)
-	}
-	f.Direction = "R"
-	if err = saveLocalForwards(p, &o, []config.Forward{f}); err == nil {
-		t.Fatal("stored reverse listener on client")
-	}
-}
-
 func TestParseWizardServerAddresses(t *testing.T) {
 	for _, input := range []string{"developer@dev.example.invalid:2222", "developer@[::1]:2200", "[2001:db8::1]", "dev.example.invalid", "2001:db8::2"} {
 		if _, err := parseServerAddress(input); err != nil {

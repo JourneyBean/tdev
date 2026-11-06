@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -51,7 +50,6 @@ type server struct {
 }
 type preferences struct {
 	SchemaVersion int                `yaml:"schema_version"`
-	DefaultServer string             `yaml:"default_server"`
 	Servers       map[string]server  `yaml:"servers"`
 	Reconnect     reconnect.Policies `yaml:"reconnect"`
 	SSH           sshx.Options       `yaml:"ssh"`
@@ -60,6 +58,7 @@ type target struct {
 	Server          server
 	Name, Project   string
 	Local, Batch    bool
+	Scratch         bool
 	InstallApproved bool
 	SSH             sshx.Options
 	Reconnect       reconnect.Policies
@@ -71,13 +70,23 @@ func defaultPreferences() preferences {
 func (a *app) prefs() (preferences, error) {
 	p := defaultPreferences()
 	b, err := os.ReadFile(filepath.Join(a.store.Root, "client.yaml"))
-	if err != nil {
-		return p, protocol.Fail("SETUP_REQUIRED", 2, "run tdev setup: %v", err)
+	if os.IsNotExist(err) {
+		return p, nil
 	}
-	if err = config.Decode(b, &p); err != nil {
+	if err != nil {
 		return p, err
 	}
-	if p.SchemaVersion != 1 || p.Servers[p.DefaultServer].SSHAlias == "" {
+	// Accept the retired input field when reading existing client files, then
+	// discard it. preferences itself cannot use or serialize a default server.
+	input := struct {
+		Current              preferences `yaml:",inline"`
+		IgnoredDefaultServer string      `yaml:"default_server,omitempty"`
+	}{Current: p}
+	if err = config.Decode(b, &input); err != nil {
+		return p, err
+	}
+	p = input.Current
+	if p.SchemaVersion != 1 {
 		return p, config.Invalid("invalid client configuration")
 	}
 	if err = p.SSH.Validate(); err != nil {
@@ -113,7 +122,7 @@ func (a *app) prefs() (preferences, error) {
 	return p, nil
 }
 func validateServer(n string, s server) error {
-	if !config.ValidName(n) || sshx.CheckAlias(s.SSHAlias) != nil || s.RemoteBinary == "" || strings.HasPrefix(s.RemoteBinary, "-") || !config.SafeText(s.RemoteBinary) || !config.SafeText(s.RemoteConfigDir) || !config.SafeText(s.SSHConfig) {
+	if n == "local" || !config.ValidName(n) || sshx.CheckAlias(s.SSHAlias) != nil || s.RemoteBinary == "" || strings.HasPrefix(s.RemoteBinary, "-") || !config.SafeText(s.RemoteBinary) || !config.SafeText(s.RemoteConfigDir) || !config.SafeText(s.SSHConfig) {
 		return config.Invalid("invalid server name, SSH alias or remote binary")
 	}
 	for name, override := range s.Projects {
@@ -124,6 +133,13 @@ func validateServer(n string, s server) error {
 	return nil
 }
 func (a *app) serverTarget(p preferences, n, project string) (target, error) {
+	if n == "local" {
+		overrides, err := a.readOverrides()
+		if err != nil {
+			return target{}, err
+		}
+		return target{Name: "local", Project: project, Local: true, Server: server{Projects: overrides.Servers["local"]}, SSH: p.SSH, Reconnect: p.Reconnect}, nil
+	}
 	s, ok := p.Servers[n]
 	if !ok {
 		return target{}, config.Invalid("unknown server %q", n)
@@ -138,37 +154,111 @@ func (a *app) serverTarget(p preferences, n, project string) (target, error) {
 	return target{Server: s, Name: n, Project: project, SSH: p.SSH, Reconnect: policies}, nil
 }
 func (a *app) resolve(ctx context.Context, arg string, confirm bool) (target, error) {
+	return a.resolveTarget(ctx, arg, confirm, false)
+}
+func (a *app) resolveOpen(ctx context.Context, arg string) (target, error) {
+	return a.resolveTarget(ctx, arg, false, true)
+}
+func (a *app) resolveTarget(ctx context.Context, arg string, confirm, includeScratch bool) (target, error) {
+	prefs, err := a.prefs()
+	if err != nil {
+		return target{}, err
+	}
 	if arg == "" {
 		p, err := a.manager().Context(ctx)
 		if err != nil {
 			return target{}, err
 		}
 		if confirm {
-			if err = a.confirm(fmt.Sprintf("Detected local project %q. Continue?", p.Name)); err != nil {
+			if err = a.confirm(fmt.Sprintf("Detected project local/%s. Continue?", p.Name)); err != nil {
 				return target{}, err
 			}
 		}
-		return target{Project: p.Name, Local: true, Reconnect: reconnect.Defaults(), SSH: sshx.Defaults()}, nil
+		return a.serverTarget(prefs, "local", p.Name)
 	}
-	p, err := a.prefs()
-	if err != nil {
-		return target{}, err
-	}
-	n, project := p.DefaultServer, arg
 	if strings.Contains(arg, "/") {
 		parts := strings.Split(arg, "/")
-		if len(parts) != 2 {
+		if len(parts) != 2 || !config.ValidName(parts[0]) || !config.ValidName(parts[1]) {
 			return target{}, config.Invalid("expected server/project")
 		}
-		n, project = parts[0], parts[1]
+		return a.serverTarget(prefs, parts[0], parts[1])
 	}
-	if !config.ValidName(project) {
+	if !config.ValidName(arg) {
 		return target{}, config.Invalid("invalid project")
 	}
-	return a.serverTarget(p, n, project)
+	if _, err := a.store.Get(arg); err == nil {
+		return a.serverTarget(prefs, "local", arg)
+	} else if protocol.Normalize(err).Code != "PROJECT_NOT_FOUND" {
+		return target{}, err
+	}
+	if includeScratch {
+		local, _ := a.serverTarget(prefs, "local", arg)
+		scratch, err := a.findScratch(ctx, local)
+		if err != nil {
+			return target{}, err
+		}
+		if scratch != nil {
+			local.Scratch = true
+			return local, nil
+		}
+	}
+	names := orderedServers(prefs)
+	// Resolve known names from the complete cached index before opening any
+	// connection. A missing cache for another server does not delay a known target.
+	for _, name := range names {
+		t, _ := a.serverTarget(prefs, name, arg)
+		if cached, ok := a.loadListingCache(t); ok {
+			if includeScratch {
+				for _, scratch := range cached.Scratches {
+					if scratch.Name == arg {
+						t.Scratch = true
+						return t, nil
+					}
+				}
+			}
+			for _, p := range cached.Projects {
+				if p.Project.Name == arg {
+					if !a.json && a.errOut != nil {
+						fmt.Fprintf(a.errOut, "Project: %s/%s\n", name, arg)
+					}
+					return t, nil
+				}
+			}
+		}
+	}
+	// Resolve from definitions alone: unrelated session state must not block
+	// project operations such as downloading an updated client from an old server.
+	for _, name := range names {
+		t, _ := a.serverTarget(prefs, name, arg)
+		lookup := t
+		lookup.Batch = true
+		_, err := a.get(ctx, lookup)
+		if err != nil {
+			if protocol.Normalize(err).Code == "PROJECT_NOT_FOUND" {
+				if includeScratch {
+					scratch, e := a.findScratch(ctx, lookup)
+					if e != nil {
+						return target{}, e
+					}
+					if scratch != nil {
+						t.Scratch = true
+						return t, nil
+					}
+				}
+				continue
+			}
+			return target{}, err
+		}
+		if !a.json && a.errOut != nil {
+			fmt.Fprintf(a.errOut, "Project: %s/%s\n", name, arg)
+		}
+		return t, nil
+	}
+	return a.serverTarget(prefs, "local", arg)
 }
+
 func (a *app) confirm(message string) error {
-	yes, _ := a.root.PersistentFlags().GetBool("yes")
+	yes, _ := a.root.Flags().GetBool("yes")
 	if yes {
 		return nil
 	}
@@ -197,63 +287,11 @@ func remoteCommand(t target, args ...string) string {
 	}
 	return strings.Join(all, " ")
 }
-func (a *app) call(ctx context.Context, t target, input []byte, args ...string) (json.RawMessage, error) {
-	ctx, cancel := context.WithTimeout(ctx, a.timeout)
-	defer cancel()
-	var out []byte
-	var err error
-	if t.Local {
-		exe, e := os.Executable()
-		if e != nil {
-			return nil, e
-		}
-		cmd := sshx.Command(ctx, exe, append([]string{"--config-dir", a.store.Root, "--json", "local"}, args...)...)
-		cmd.Stdin = bytes.NewReader(input)
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		out, err = cmd.Output()
-		if err != nil && len(out) == 0 {
-			return nil, protocol.Fail("RUNTIME_ERROR", 1, "local command: %v: %s", err, stderr.String())
-		}
-	} else {
-		cmd := sshx.Command(ctx, "ssh", append(t.SSH.Args(t.Batch), "-T", t.Server.SSHAlias, remoteCommand(t, append([]string{"--json", "local"}, args...)...))...)
-		cmd.Stdin = bytes.NewReader(input)
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		out, err = cmd.Output()
-		if err != nil && len(out) == 0 {
-			return nil, sshx.Error(err, stderr.String())
-		}
-	}
-	var r struct {
-		ProtocolVersion int             `json:"protocol_version"`
-		OK              bool            `json:"ok"`
-		Data            json.RawMessage `json:"data"`
-		Error           *protocol.Error `json:"error"`
-	}
-	if e := json.Unmarshal(out, &r); e != nil {
-		return nil, protocol.Fail("PROTOCOL_INCOMPATIBLE", 8, "invalid control response: %v", e)
-	}
-	if r.ProtocolVersion != protocol.Version {
-		return nil, protocol.Fail("PROTOCOL_INCOMPATIBLE", 8, "unsupported protocol version %d", r.ProtocolVersion)
-	}
-	if !r.OK {
-		if r.Error == nil {
-			return nil, protocol.Fail("PROTOCOL_INCOMPATIBLE", 8, "missing remote error")
-		}
-		r.Error.Exit = exitForCode(r.Error.Code)
-		return nil, r.Error
-	}
-	if err != nil {
-		return nil, sshx.Error(err, "control process failed after responding")
-	}
-	return r.Data, nil
-}
 func exitForCode(code string) int {
 	switch code {
 	case "PROJECT_NOT_FOUND":
 		return 3
-	case "CONFIG_CONFLICT", "SESSION_CONFLICT", "DESTINATION_CHANGED", "SOURCE_CHANGED":
+	case "CONFIG_CONFLICT", "SESSION_CONFLICT", "SESSION_UNMANAGED", "MOUNT_CONFLICT", "DESTINATION_CHANGED", "SOURCE_CHANGED":
 		return 4
 	case "SESSION_NOT_FOUND":
 		return 5
@@ -275,10 +313,7 @@ func exitForCode(code string) int {
 }
 func (a *app) get(ctx context.Context, t target) (config.Project, error) {
 	var p config.Project
-	if err := a.handshake(ctx, t, "project-v1"); err != nil {
-		return p, err
-	}
-	b, err := a.call(ctx, t, nil, "config", "get", t.Project)
+	b, err := a.call(ctx, t, nil, "project", "get", t.Project)
 	if err == nil {
 		err = json.Unmarshal(b, &p)
 	}
@@ -287,39 +322,9 @@ func (a *app) get(ctx context.Context, t target) (config.Project, error) {
 	}
 	return p, err
 }
-func (a *app) handshake(ctx context.Context, t target, required ...string) error {
-	data, err := a.call(ctx, t, nil, "version")
-	if err != nil {
-		if protocol.Normalize(err).Code == "CONNECTION_FAILED" {
-			return err
-		}
-		return protocol.Fail("PROTOCOL_INCOMPATIBLE", 8, "remote capability handshake failed: %v", err)
-	}
-	var v struct {
-		ProtocolVersion int      `json:"protocol_version"`
-		SchemaVersion   int      `json:"schema_version"`
-		Capabilities    []string `json:"capabilities"`
-	}
-	if err = json.Unmarshal(data, &v); err != nil {
-		return protocol.Fail("PROTOCOL_INCOMPATIBLE", 8, "invalid remote capability response")
-	}
-	if v.ProtocolVersion != 1 || v.SchemaVersion != 1 {
-		return protocol.Fail("PROTOCOL_INCOMPATIBLE", 8, "remote protocol/configuration is incompatible")
-	}
-	available := map[string]bool{}
-	for _, c := range v.Capabilities {
-		available[c] = true
-	}
-	for _, c := range required {
-		if !available[c] {
-			return protocol.Fail("PROTOCOL_INCOMPATIBLE", 8, "remote lacks required capability %s; upgrade it first", c)
-		}
-	}
-	return nil
-}
 func (a *app) client() {
-	a.root.PersistentFlags().BoolP("yes", "y", false, "accept displayed project, overwrite and reverse-forward confirmations")
-	a.root.PersistentFlags().StringVar(&a.sshConfig, "ssh-config", "", "alternative OpenSSH configuration (also used by scp/SSHFS)")
+	a.root.Flags().BoolP("yes", "y", false, "accept project, overwrite and installation confirmations")
+	a.root.Flags().StringVar(&a.sshConfig, "ssh-config", "", "alternative OpenSSH configuration (also used by scp/SSHFS)")
 	a.setupCommand()
 	a.workspaceCommands()
 	a.forwardCommand()

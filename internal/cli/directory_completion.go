@@ -44,7 +44,9 @@ done`
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	t.Batch = true
-	data, err := a.shell(ctx, t, script)
+	// OpenSSH invokes the user's login shell. Run enumeration in POSIX sh so
+	// shells such as zsh cannot reject an unmatched hidden-directory glob.
+	data, err := a.shell(ctx, t, "sh -c "+tmux.Quote(script))
 	if err != nil {
 		return nil, err
 	}

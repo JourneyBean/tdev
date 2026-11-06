@@ -7,13 +7,27 @@ import (
 
 	"github.com/spf13/cobra"
 	"tdev/internal/config"
+	"tdev/internal/protocol"
 )
 
-func (a *app) localExtras(local, session *cobra.Command) {
-	a.command(local, "version", "Machine protocol and capability handshake", cobra.NoArgs, func(context.Context, *cobra.Command, []string) (any, error) { return versionData(), nil })
+func (a *app) apiExtras(local, session *cobra.Command) {
+	version := a.command(local, "version", "Machine protocol and capability handshake", cobra.NoArgs, func(_ context.Context, c *cobra.Command, _ []string) (any, error) {
+		required, _ := c.Flags().GetStringArray("require")
+		available := map[string]bool{}
+		for _, capability := range versionData()["capabilities"].([]string) {
+			available[capability] = true
+		}
+		for _, capability := range required {
+			if !available[capability] {
+				return nil, protocol.Fail("PROTOCOL_INCOMPATIBLE", 8, "missing capability %s; upgrade the server", capability)
+			}
+		}
+		return versionData(), nil
+	})
+	version.Flags().StringArray("require", nil, "required API capability")
 	attach := &cobra.Command{Use: "attach <project>", Short: "Attach an existing session using an identity-checked terminal", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
 		if a.json || !terminalAvailable(a.in) {
-			return config.Invalid("local session attach requires a terminal without --json")
+			return config.Invalid("api session attach requires a terminal without --json")
 		}
 		p, err := a.store.Get(args[0])
 		if err != nil {
@@ -41,11 +55,12 @@ func (a *app) localExtras(local, session *cobra.Command) {
 	})
 	status.Flags().String("token", "", "attachment identity")
 	_ = status.MarkFlagRequired("token")
-	a.localTransfer(local)
-	a.localUpdate(local)
+	a.apiScratch(local)
+	a.apiTransfer(local)
+	a.apiUpdate(local)
 }
 func versionData() map[string]any {
-	return map[string]any{"version": Version, "protocol_version": 1, "schema_version": 1, "capabilities": []string{"project-v1", "config-revision-v1", "window-v1", "forward-config-v1", "session-v1", "attachment-v1", "transfer-v1", "binary-install-v1", "mount-probe-nfc-v1"}}
+	return map[string]any{"version": Version, "protocol_version": 1, "schema_version": 1, "capabilities": []string{"api-v1", "scratch-v1", "project-v1", "config-revision-v1", "session-v1", "attachment-v1", "transfer-v1", "transfer-file-directory-v1", "binary-install-v1", "mount-probe-nfc-v1"}}
 }
 func (a *app) clientDoctor() any {
 	paths := map[string]any{}

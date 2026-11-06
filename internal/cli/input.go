@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -19,6 +20,7 @@ type completionResult struct {
 	id      int
 	matches []string
 	err     error
+	started time.Time
 }
 type promptModel struct {
 	input                 textinput.Model
@@ -32,6 +34,8 @@ type promptModel struct {
 	width, height         int
 	busy, done, cancelled bool
 	notice                string
+	diagnosticNotice      string
+	onFailure             func(error, time.Time) string
 }
 
 func (m *promptModel) Init() tea.Cmd { return textinput.Blink }
@@ -45,6 +49,7 @@ func (m *promptModel) clearCompletion() {
 	m.matches = nil
 	m.selected = -1
 	m.notice = ""
+	m.diagnosticNotice = ""
 }
 func commonDirectoryPrefix(matches []string) string {
 	if len(matches) == 0 {
@@ -76,7 +81,10 @@ func (m *promptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = false
 		if msg.err != nil {
-			m.notice = "补全失败，可继续输入或重试 Tab"
+			m.notice = "补全失败（" + diagnosticReason(msg.err) + "），可重试 Tab"
+			if m.onFailure != nil {
+				m.diagnosticNotice = m.onFailure(msg.err, msg.started)
+			}
 			return m, nil
 		}
 		if len(msg.matches) == 0 {
@@ -143,7 +151,11 @@ func (m *promptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				ctx, cancel := context.WithCancel(m.ctx)
 				m.queryCancel = cancel
 				id, prefix, complete := m.queryID, m.input.Value(), m.complete
-				return m, func() tea.Msg { matches, err := complete(ctx, prefix); return completionResult{id, matches, err} }
+				return m, func() tea.Msg {
+					started := time.Now()
+					matches, err := complete(ctx, prefix)
+					return completionResult{id: id, matches: matches, err: err, started: started}
+				}
 			}
 		}
 		// Typed edits invalidate displayed and in-flight suggestions.
@@ -165,6 +177,9 @@ func (m *promptModel) View() tea.View {
 	}
 	if m.notice != "" {
 		view.WriteString("\n" + ansi.Truncate(m.notice, m.width-1, "…"))
+	}
+	if m.diagnosticNotice != "" {
+		view.WriteString("\n" + ansi.Truncate(m.diagnosticNotice, m.width-1, "…"))
 	}
 	if len(m.matches) > 0 {
 		rows := min(7, max(1, m.height-4))
@@ -200,7 +215,7 @@ func (a *app) editLine(ctx context.Context, label, fallback string, complete dir
 	if fallback != "" {
 		label += " [" + fallback + "]"
 	}
-	model := &promptModel{input: input, label: label, complete: complete, ctx: ctx, width: max(8, width), height: max(4, height), selected: -1}
+	model := &promptModel{input: input, label: label, complete: complete, ctx: ctx, width: max(8, width), height: max(4, height), selected: -1, onFailure: a.completionFailure}
 	model.input.SetWidth(max(1, model.width-4))
 	program := tea.NewProgram(model, tea.WithInput(a.in), tea.WithOutput(a.errOut), tea.WithContext(ctx), tea.WithoutSignalHandler())
 	_, err = program.Run()
