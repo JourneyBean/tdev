@@ -1,8 +1,12 @@
 # 开发验收记录
 
-Last verified: 2026-11-06。源码版本：0.2.0。下表保留集成验收使用的开发版版本号。
+Last verified: 2026-11-06。源码版本：0.2.1。下表保留集成验收使用的开发版版本号。
 
 本记录汇总第一版核心功能的自动化验证、环境实测和待验证项。
+
+## v0.2.1 版本验收
+
+2026-11-06：完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 120 秒，包含真实隔离 SSH/tmux 与连续断线重连。`make check`（go vet、gofmt、diff 与脚本语法）、四平台 `make cross`、`make build` 通过；构建产物 JSON version 返回 0.2.1，协议与 schema 均为 1。发布改动与文件名已检查，敏感信息及内部环境标识扫描未发现问题。原生执行环境为 Linux，macOS 仅完成交叉构建。
 
 ## GitLab CI 发布验收
 

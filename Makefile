@@ -1,5 +1,5 @@
 GO ?= go
-VERSION ?= 0.2.0
+VERSION ?= 0.2.1
 LDFLAGS = -X tdev/internal/cli.Version=$(VERSION)
 
 .PHONY: build test check cross release
