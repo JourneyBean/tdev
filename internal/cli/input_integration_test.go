@@ -24,7 +24,7 @@ func TestWizardEditingAndRemoteCompletion(t *testing.T) {
 		t.Skip("private sshd integration runs on Linux")
 	}
 	s := testssh.Start(t)
-	binary := buildCLI(t, "0.0.3-dev")
+	binary := buildCLI(t, "0.1.0-dev")
 	version := terminalCLI(t, binary, t.TempDir(), s.Config, "--json", "version")
 	version.waitText(t, "protocol_version")
 	version.exit(t, 0)
@@ -76,6 +76,7 @@ func TestWizardEditingAndRemoteCompletion(t *testing.T) {
 	wizard.write(t, base+"/目录\t")
 	wizard.waitText(t, "$(false)/")
 	wizard.write(t, "\r")
+	finishProjectWizard(t, wizard)
 	wizard.waitText(t, "已创建项目 fixture/edited")
 	wizard.exit(t, 0)
 	store := config.Store{Root: remoteRoot}
@@ -115,6 +116,7 @@ func TestWizardEditingAndRemoteCompletion(t *testing.T) {
 		t.Fatal("candidate menu should show directory names rather than repeat full paths")
 	}
 	choice.write(t, "\t\x1b[C\r\r")
+	finishProjectWizard(t, choice)
 	choice.waitText(t, "已创建项目 fixture/choice")
 	choice.exit(t, 0)
 	p, err = store.Get("choice")
@@ -146,10 +148,33 @@ func TestWizardEditingAndRemoteCompletion(t *testing.T) {
 	edit := terminalCLI(t, binary, root, s.Config, "create", "fixture/unicode")
 	edit.waitText(t, "Tab 补全")
 	edit.write(t, base+"/目录 空格'$(false)错\x1b[D\x1b[3~\r")
+	finishProjectWizard(t, edit)
 	edit.waitText(t, "已创建项目 fixture/unicode")
 	edit.exit(t, 0)
 	p, err = store.Get("unicode")
 	if err != nil || !strings.HasSuffix(p.Directory, names[0]) {
 		t.Fatal("CJK cursor editing", p, err)
+	}
+	// Drop the real SSH transport after the editor is ready. Completion errors
+	// must remain visible and leave a private diagnostic without the typed path.
+	failureRoot := t.TempDir()
+	executeBinary(t, binary, failureRoot, s.Config, "", 0, "setup", "--name", "fixture", "--ssh-alias", s.Alias, "--remote-binary", binary, "--remote-config-dir", remoteRoot)
+	failure := terminalCLI(t, binary, failureRoot, s.Config, "create", "fixture/failed-completion")
+	failure.waitText(t, "Tab 补全")
+	s.Offline(true)
+	failure.write(t, "~/private-directory-sentinel\t")
+	failure.waitText(t, "补全失败")
+	failure.waitText(t, "诊断日志：")
+	failure.write(t, "\x03")
+	failure.exit(t, 130)
+	events, logs := diagnosticEvents(t, failureRoot)
+	found := false
+	for _, event := range events {
+		if event.Operation == "directory_completion" && event.Code == "CONNECTION_FAILED" {
+			found = true
+		}
+	}
+	if !found || strings.Contains(logs, "private-directory-sentinel") {
+		t.Fatal("SSH completion failure was not logged privately", logs)
 	}
 }

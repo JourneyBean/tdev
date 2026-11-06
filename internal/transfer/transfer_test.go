@@ -174,3 +174,68 @@ func TestMacUnicodeAndCaseAliasesRejectedBeforeWrites(t *testing.T) {
 		}
 	}
 }
+
+func TestFileCopyToDirectoryAndExactFilename(t *testing.T) {
+	ctx := context.Background()
+	source := filepath.Join(t.TempDir(), "中文 file ' [x]")
+	put(t, source, "new contents")
+	manifest, err := Describe(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	t.Chdir(dir)
+	for _, destination := range []string{"./", dir, filepath.Join(t.TempDir(), "renamed")} {
+		p, err := PlanCopyDestination(ctx, destination, filepath.Base(source), manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := destination
+		if info, err := os.Stat(destination); err == nil && info.IsDir() {
+			want = filepath.Join(dir, filepath.Base(source))
+		}
+		if p.Destination != want {
+			t.Fatalf("destination=%q want=%q", p.Destination, want)
+		}
+		store := config.Store{Root: t.TempDir()}
+		stage, err := Prepare(store, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fill(t, ctx, source, stage)
+		if _, err = Commit(ctx, store, stage.ID); err != nil {
+			t.Fatal(err)
+		}
+		if contents, err := os.ReadFile(want); err != nil || string(contents) != "new contents" {
+			t.Fatal(string(contents), err)
+		}
+	}
+	put(t, filepath.Join(dir, filepath.Base(source)), "existing")
+	plan, err := PlanCopyDestination(ctx, dir, filepath.Base(source), manifest)
+	if err != nil || plan.Overwrites != 1 {
+		t.Fatal("overwrite was not detected", plan, err)
+	}
+	store := config.Store{Root: t.TempDir()}
+	stage, err := Prepare(store, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer Abort(store, stage.ID)
+	fill(t, ctx, source, stage)
+	put(t, plan.Destination, "concurrent update")
+	if _, err = Commit(ctx, store, stage.ID); protocol.Normalize(err).Code != "DESTINATION_CHANGED" {
+		t.Fatal("lost destination conflict", err)
+	}
+	for _, name := range []string{"", ".", "..", "../escape", "nested/name", "bad\nname"} {
+		if _, err := PlanCopyDestination(ctx, dir, name, manifest); err == nil {
+			t.Fatalf("accepted unsafe basename %q", name)
+		}
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err = os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = PlanCopyDestination(ctx, link, filepath.Base(source), manifest); err == nil {
+		t.Fatal("followed destination directory symlink")
+	}
+}

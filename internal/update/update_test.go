@@ -34,7 +34,7 @@ func releaseFixture(t *testing.T, version string) (string, string) {
 	if err = os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0600); err != nil {
 		t.Fatal(err)
 	}
-	program := "#!/bin/sh\nprintf '%s\\n' '{\"protocol_version\":1,\"ok\":true,\"data\":{\"version\":\"" + version + "\",\"protocol_version\":1,\"schema_version\":1}}'\n"
+	program := "#!/bin/sh\nif [ -n \"${TDEV_TEST_INSTALL_ARGS:-}\" ]; then printf '%s\\n' \"$@\" > \"$TDEV_TEST_INSTALL_ARGS\"; fi\nprintf '%s\\n' '{\"protocol_version\":1,\"ok\":true,\"data\":{\"version\":\"" + version + "\",\"protocol_version\":1,\"schema_version\":1}}'\n"
 	for _, goos := range []string{"linux", "darwin"} {
 		for _, arch := range []string{"amd64", "arm64"} {
 			if err = os.WriteFile(filepath.Join(dir, "tdev-"+goos+"-"+arch), []byte(program), 0700); err != nil {

@@ -19,7 +19,7 @@ func TestShellCompletions(t *testing.T) {
 		t.Skip("private sshd integration runs on Linux")
 	}
 	s := testssh.Start(t)
-	binary := buildCLI(t, "0.0.3-dev")
+	binary := buildCLI(t, "0.1.0-dev")
 	root, remoteRoot := t.TempDir(), t.TempDir()
 	store := config.Store{Root: remoteRoot}
 	p, err := store.Create(context.Background(), "demo", t.TempDir())
@@ -56,7 +56,7 @@ func TestShellCompletions(t *testing.T) {
 		{[]string{"upgrade", "--remote", "fi"}, "fixture\n"},
 		{[]string{"create", "fi"}, "fixture/\n"},
 		{[]string{"setup", "--ssh-alias", "fi"}, "fixture\n"},
-		{[]string{"project", "window", "remove", "demo", "--id", "sh"}, "shell\n"},
+		{[]string{"forward", "remove", "demo", "--id", "ap"}, "api\n"},
 		{[]string{"override", "demo", "--forward", "ap"}, "api\n"},
 	} {
 		if out := query(tc.args...); !strings.Contains(out, tc.want) {

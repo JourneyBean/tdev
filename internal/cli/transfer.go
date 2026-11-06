@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"tdev/internal/config"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -14,7 +18,7 @@ import (
 	"tdev/internal/transfer"
 )
 
-func (a *app) localTransfer(local *cobra.Command) {
+func (a *app) apiTransfer(local *cobra.Command) {
 	g := group(local, "transfer", "Plan, stage and commit exact file/directory copies")
 	for _, op := range []string{"describe", "plan", "prepare", "export", "commit", "abort"} {
 		op := op
@@ -44,6 +48,10 @@ func (a *app) localTransfer(local *cobra.Command) {
 				if !filepath.IsAbs(destination) {
 					destination = filepath.Join(p.Directory, destination)
 				}
+				sourceName, _ := c.Flags().GetString("source-name")
+				if sourceName != "" {
+					return transfer.PlanCopyDestination(ctx, destination, sourceName, request.Manifest)
+				}
 				return transfer.PlanDestination(ctx, destination, request.Manifest)
 			case "prepare":
 				var plan transfer.Plan
@@ -63,6 +71,9 @@ func (a *app) localTransfer(local *cobra.Command) {
 			c.Flags().String("path", "", "absolute or project-relative path")
 			_ = c.MarkFlagRequired("path")
 		}
+		if op == "plan" {
+			c.Flags().String("source-name", "", "source basename when copying a file to an existing directory")
+		}
 		if op == "commit" || op == "abort" {
 			c.Flags().String("id", "", "owned transfer ID")
 			_ = c.MarkFlagRequired("id")
@@ -73,15 +84,14 @@ func (a *app) transferCommands() {
 	for _, op := range []string{"push", "pull"} {
 		op := op
 		c := &cobra.Command{Use: op + " <project> <source> <destination>", Short: op + " files or directory contents without deleting unrelated files", Args: cobra.ExactArgs(3), RunE: func(c *cobra.Command, args []string) error {
-			if _, err := exec.LookPath("scp"); err != nil {
-				return protocol.Fail("DEPENDENCY_MISSING", 7, "OpenSSH scp with SFTP support is required")
-			}
 			t, err := a.resolve(c.Context(), args[0], false)
 			if err != nil {
 				return err
 			}
-			if err = a.handshake(c.Context(), t, "transfer-v1"); err != nil {
-				return err
+			if !t.Local {
+				if _, err := exec.LookPath("scp"); err != nil {
+					return protocol.Fail("DEPENDENCY_MISSING", 7, "OpenSSH scp with SFTP support is required")
+				}
 			}
 			if _, err = a.get(c.Context(), t); err != nil {
 				return err
@@ -106,6 +116,45 @@ func (a *app) remoteAbort(t target, id string) {
 	}
 }
 func (a *app) scp(ctx context.Context, t target, source, destination string) error {
+	if t.Local {
+		source = strings.TrimPrefix(source, ":")
+		destination = strings.TrimPrefix(destination, ":")
+		info, err := os.Lstat(source)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return config.Invalid("transfer source must be a regular file")
+		}
+		in, err := os.Open(source)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err != nil {
+			return err
+		}
+		defer out.Close()
+		buffer := make([]byte, 64*1024)
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			n, err := in.Read(buffer)
+			if n > 0 {
+				if _, e := out.Write(buffer[:n]); e != nil {
+					return e
+				}
+			}
+			if err == io.EOF {
+				return out.Sync()
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
 	args := append([]string{"-s", "-q", "-B"}, t.SSH.Args(true)...)
 	args = append(args, "--", source, destination)
 	cmd := sshx.Command(ctx, "scp", args...)
@@ -123,7 +172,11 @@ func (a *app) push(ctx context.Context, t target, source, destination string) (a
 		return nil, err
 	}
 	request, _ := json.Marshal(map[string]any{"destination": destination, "manifest": manifest})
-	b, err := a.call(ctx, t, request, "transfer", "plan", t.Project)
+	args := []string{"transfer", "plan", t.Project}
+	if !manifest.Entries[0].Directory {
+		args = append(args, "--source-name", filepath.Base(source))
+	}
+	b, err := a.call(ctx, t, request, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +228,7 @@ func (a *app) pull(ctx context.Context, t target, source, destination string) (a
 	if err = json.Unmarshal(b, &manifest); err != nil {
 		return nil, err
 	}
-	plan, err := transfer.PlanDestination(ctx, destination, manifest)
+	plan, err := transfer.PlanCopyDestination(ctx, destination, filepath.Base(source), manifest)
 	if err != nil {
 		return nil, err
 	}

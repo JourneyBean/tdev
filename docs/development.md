@@ -1,14 +1,64 @@
 # 开发记录与实现取舍
 
-Last verified: 2026-11-03。版本：0.0.3。历史集成验收使用开发版版本号，见验收记录。
+Last verified: 2026-11-06。版本：0.2.0。历史集成验收使用开发版版本号，见验收记录。
+
+## scratch 临时会话
+
+恢复入口统一为 open，scratch 用户命令仅保留创建。open 的解析在现有项目解析器中按需纳入 scratch；其他项目操作保持项目范围。裸名称先查本机，再查包含项目和 scratch 的服务器缓存，最后查询远端实际定义与会话。缓存仅用于定位，进入前重新读取项目与 scratch；同一目标同名返回冲突，已知缓存 scratch 结束后返回缺失，未知名称沿用项目创建向导。scratch 附着跳过项目转发与挂载，--mount 返回参数错误。open 的名称补全包含 scratch，ls 的恢复提示统一生成 open 命令。
+
+`scratch` 使用独立 `@tdev_scratch_name`、`@tdev_scratch_directory` 和 generation 标记，创建与标记在同一 tmux 命令队列中完成，标记显式指定新会话目标，保留调用方的 tmux 上下文。逻辑名称独立于项目名称，实际 tmux 名称带 `tdev-scratch-` 前缀；同名普通会话保持原状，实际名称占用时报冲突。配置根内的 scratch-session 锁串行化同名创建，tmux 的名称唯一约束处理跨配置根竞争。会话不携带项目 UUID，项目配置和 save 继续只管理项目会话。
+
+临时会话复用现有 OpenSSH 终端附着、客户端就绪检测及重连预算，按 session ID 与 generation 校验原会话。本机 tmux 内使用 switch-client 进入临时会话。机器 API 保持非交互，通过新增 scratch-v1 能力检查；JSON scratch 用户入口创建后返回，终端入口执行附着。
+
+ls 缓存新增 scratches 字段，保留 projects 的既有结构。展示阶段应用类型筛选，缓存保留完整发现结果；离线保留上次成功刷新数据。旧服务器缺少 scratch-v1 时仍刷新项目，并通过 scratch_warning 提示升级；其 scratch 列表为空。
+
+## v0.2.0 版本与兼容性
+
+GitLab CI 按 test/build/release 分阶段执行，受保护的稳定版本 tag 触发签名及发布。签名密钥通过 Protected File 变量提供，临时复制至仓库之外并核对 docs/release.pub。构建检查 tag、Makefile、源码版本和发布说明一致；发布前再次验证签名及产物摘要。Generic Package Registry 保存固定清单的 14 个文件，文件就绪后通过 CI_JOB_TOKEN 创建 Release 和永久下载链接。已有相同包文件可复用，内容冲突和已有 Release 保留原样；resource group 串行化发布。API 错误只报告操作和状态，下载重定向移除 job token。
+
+安装包生成器接受成对的版本下载目录和升级目录，通过模板引用写入脚本；默认值保留 GitHub 来源。GitLab 构建内置当前项目的 tag 下载目录及 latest Release 升级目录，安装后凭据记录后者。显式 release-url 保留覆盖行为；URL 限制沿用 HTTPS 且无凭据、查询和 fragment。在线 GitLab 安装要求匿名可读，私有项目使用外部认证下载后的离线安装路径。
+
+默认构建版本与源码运行版本统一为 0.2.0。协议版本、配置 schema 和 capability 要求沿用现有定义；兼容性继续按能力检查。历史发布说明与升级回滚测试中的固定版本保留原值。当前发布说明汇总诊断日志与 zsh 目录补全修复。
+
+## v0.1.0 项目入口与 API
+
+远端目录补全将完整枚举脚本引用为单个参数，通过 sh -c 执行。OpenSSH 仍使用账户登录 shell 解析外层命令，内部通配符和循环遵循 POSIX sh 语义；zsh 的 NOMATCH 设置不会中断没有隐藏目录或空目录的查询。路径中的引号、空格和 shell 元字符继续通过两层参数引用保持原值，HOME 在远端 sh 中展开。该修复位于客户端生成的命令中，更新客户端即可生效。
+
+诊断日志统一写入当前配置根下的 logs/diagnostics.jsonl，默认只记录失败，--debug 增加成功命令与 SSH/API 批次耗时。记录包含 UTC 时间、PID、固定命令路径或操作名、服务器名称、耗时、协议错误码、已知原因类别和可用的进程退出码。分类从内存中的错误文本提取固定标签，原始错误、命令参数、stdin、环境变量及远端输出保持在日志之外；未知原因记为 operation_failed。shell 请求在上下文到期时优先保留 deadline_exceeded，避免进程被终止后只剩 signal 错误。目录补全在当前查询失败时显示类别与日志位置，过期结果继续丢弃。
+
+日志使用配置根内独立内核锁串行追加和轮转，每次写入的锁等待预算为 250 ms，独立于操作取消上下文。目录权限 0700、文件 0600，拒绝符号链接日志目标及开放权限的现有日志文件；单文件 1 MiB，保留三个备份。写入错误保持原命令退出码与 JSON 协议，交互向导及人类可读命令输出提示日志不可用。已有 forward 进程专用诊断文件继续使用原生命周期。
+
+ls 依据标准输出是否为终端启用原地刷新，先显示本机与远端缓存，再启动并发查询；标准输入与标准错误的重定向独立于此判断。刷新阶段与最终输出共用列表格式，warning 合并进项目状态标签，末尾统一提示 doctor。JSON 保留完整 warning 与 override_error；doctor 汇总项目诊断，指定项目时展示对应诊断与依赖信息。管道与 JSON 输出一次最终结果。
+
+setup 的客户端配置锁仅覆盖重新读取、冲突检查和连接配置写入；保存后立即释放，再执行缓存更新与首个项目向导。多个终端可同时停留在项目输入界面，后续 setup 可独立保存连接。
+
+会话状态通过一次 `list-sessions` 读取 UUID、名称和初始化标记，按 UUID 确认归属。旧版命名及手工改名的托管会话直接复用，名称差异返回 `session.warning`；同名普通会话返回 `unmanaged` 和 warning。`open` 遇到同名普通会话时创建独立的 `tdev-<UUID>` 托管会话，原会话保留。重复 UUID 返回 warning，接管和停止操作返回 `SESSION_UNMANAGED`。`ls` 保持各项目与服务器的刷新结果，warning 展示在项目状态标签中；应用错误状态为 `error`，连接失败为 `unreachable`，协议不兼容为 `upgrade-required`。
+
+setup 的初次项目发现与首个项目创建后的刷新仅读取项目定义，返回及缓存的会话状态为 unknown，由 ls 刷新实际状态。sh 创建窗口后，仅在接下来需要 attach 时额外读取会话状态；JSON 输出与本机 tmux 内窗口切换直接使用创建结果。显式指定项目的配置、转发、传输、挂载与补全操作独立于 tmux 状态；省略项目名时读取当前会话的项目标记用于定位目标。doctor 和安装前检查保留 tmux 程序依赖检查。
+
+`open` 完成会话、可选挂载和转发准备后，在进入 tmux 前向终端标准输出发送 OSC 2，将标题设为 `tdev: server/project`，本机服务器名为 local。标准输出重定向时跳过标题序列；标题使用已验证的服务器名和项目名。
+
+默认服务器字段已从运行配置和 setup 选择逻辑移除；已有文件的 default_server 仅在解码时丢弃，setup 重写配置时移除该字段，其他未知字段继续严格拒绝。服务器顺序统一按名称排列，本机项目优先规则保持一致。窗口 ID 的旧补全分支已删除。forward 只运行映射，保存由 add/remove 和 override 负责；旧保存参数与把数字参数解释为端口的简写已移除，数字项目名按普通项目解析。
+
+用户命令直接操作项目：create/show/edit、ls、open/save/sh/stop、forward、push/pull、mount/unmount。原 project 与 window 用户分组移除；机器接口由 local 改为 api。`api project list/create/get/set` 统一读写完整定义，session 管理实际会话，transfer/binary/mount-probe 管理对应机器操作。
+
+local 是保留的内置服务器名，无需连接配置。完整项目标识为 server/project；裸名称先检查本机，再按远端名称排序搜索。临时索引命中后，实际操作读取目标机器的最新定义；命中离线目标保留原目标并报告失败。缓存未命中时逐台读取指定项目定义，PROJECT_NOT_FOUND 继续查找，其他错误保留；解析目标独立于 tmux 状态，支持从旧版远端拉取更新。create 的裸名称默认本机，空参数向导提供本机和远端选择。
+
+ls 并发刷新，每台服务器的版本与项目/会话查询合并为一次 SSH。终端先显示缓存和 syncing，逐项更新后输出最终列表；管道与 JSON 仅输出一次最终结果。缓存位于系统临时目录的用户私有目录，按客户端配置根和连接信息的哈希隔离，0600 文件原子替换。成功空列表替换旧快照；失败保留更新时间与缓存。旧版 API 标记 upgrade-required；部分失败返回 9，完整列表在 error.details。
+
+每次机器请求通过 shell 顺序执行顶层 version、`api version --require` 与实际子命令。用每次生成的随机标记记录各段输出和退出码，本地严格解析。API gate 成功后才执行读写，不依赖 jq 或新增请求封装。多项独立查询使用同一 SSH 批次；stdin 保留给实际写操作。旧服务端显示已读取版本和 upgrade --remote 指引，升级通过上传已验证候选程序引导，原 API 不可用时仍可执行。
+
+create、open 缺失项目和 edit 使用同一份草稿向导。目录、窗口和映射全部收集并验证，最终确认后再写入；完整创建通过 api project create --stdin 原子完成。edit 预填原值并携带原 revision。L 映射的服务地址一次输入 host:port，客户端监听差异按 UUID 和 forward ID 保存在 overrides.yaml。保存定义与保存 override 的部分失败分别报告。
+
+tmux session 优先使用项目名称，UUID 标记验证归属并支持复用旧会话。新项目窗口 main；sh --name 指定新窗口名称，默认 shell。open 默认只建立会话、转发和终端；--mount 显式挂载，独立 mount/unmount 保留。挂载路径按项目 UUID 保存在本机 override；open 退出后挂载保留。本机项目直接进入 tmux，转发用本地 TCP listener，文件传输复用暂存与哈希校验。
 
 ## v0.0.3 连接向导与配置发现
 
 `setup` 从本机已有 tdev 连接和 SSH Host/Include 发现候选，支持搜索、序号选择和直接填写地址。读取 SSH 配置时仅提取展示字段，避免为了展示列表执行 Match 命令。向导本身不受单次 SSH 超时限制，每次远端请求独立计时；Ctrl-C 或 EOF 退出。参数形式和 JSON 机器接口保留。
 
-验证连接后探测已有远端程序，读取远端项目及会话状态，按需提示安装。新地址使用私有 SSH profile，既有服务器保留原配置目录与偏好。提交本机连接前重新读取并检查同一服务器配置，冲突时停止，其他服务器的并发改动保留。
+验证连接后探测已有远端程序，读取远端项目定义，按需提示安装。新地址使用私有 SSH profile，既有服务器保留原配置目录与偏好。提交本机连接前重新读取并检查同一服务器配置，冲突时停止，其他服务器的并发改动保留。
 
-`client.yaml` 继续保存连接及重连偏好；本机监听端口差异和附加 -L 单独保存在 `overrides.yaml`。`ls` 和 `open` 每次发现远端定义后合并，覆盖按项目 UUID 和稳定 forward ID 绑定；过期身份、已删除映射、重复监听和非法端口在执行前报错。`get` 保持读取远端原始定义，避免 `save` 把客户端差异写回远端。`forward --save-remote` 是共享定义的显式写入入口。
+`client.yaml` 继续保存连接及重连偏好；本机监听端口差异和附加 -L 单独保存在 `overrides.yaml`。`ls` 和 `open` 每次发现远端定义后合并，覆盖按项目 UUID 和稳定 forward ID 绑定；过期身份、已删除映射、重复监听和非法端口在执行前报错。`get` 保持读取远端原始定义，避免 `save` 把客户端差异写回远端。共享定义通过 `forward add/remove` 或 edit 修改。
 
 ## v0.0.2 安装与分发
 
@@ -29,7 +79,7 @@ HTTP 域名代理仍属于后续版本。
 
 配置使用严格 YAML/JSON 解码，拒绝重复 key、未知字段和不支持的版本。
 修改持有内核文件锁，比较 revision，保留历史版本后原子写入；配置默认 0600。
-local 接口无确认交互，--json 返回单一协议响应；客户端按 error.code 区分远端错误和连接错误。
+api 接口无确认交互，--json 返回单一协议响应；客户端按 error.code 区分远端错误和连接错误。
 协议握手同时检查 schema 和所需 capability，不以程序补丁版本完全相同作为前提。
 
 ## 转发所有权与就绪
@@ -54,12 +104,15 @@ ready 表示 SSH 监听已建立；应用健康由应用自身检查。
 重连始终查询原会话的 session ID 与随机 generation；缺失或被替换时结束，不再次 ensure。
 attach 的就绪检查依据远端 tmux 实际 client PID，避免仅因探测成功就重置预算。
 连接稳定至少 max(重试间隔, 1s) 后才重置本次失联计数，防止快速连接/断开空转。
+连续断线集成测试在第一次恢复后留出附着查询和稳定计时的时间，并分别验证两次恢复的终端输出与重试计数。
 重连使用批模式，认证和 host key 问题不会持续弹交互提示。
 
 连接故障结合连接阶段和 SSH 诊断分类；首次失败使用诊断白名单识别可重试故障，未知
 原因保守退出。控制连接使用 INFO 日志级别，保留故障诊断和用户 locale。
 
 ## 传输一致性
+
+单文件 push/pull 到已有目录时保留源文件名，包括 pull 的 ./ 目标；目标为显式文件名时支持重命名。CLI 在目标机器上先展开目录，再复用精确路径计划、覆盖确认和并发快照校验，目录源继续按内容合并。push 通过 api transfer plan --source-name 传递 basename，并协商 transfer-file-directory-v1 能力；pull 在客户端解析目标，兼容原有远端传输响应。basename 校验拒绝路径穿越，符号链接目标继续拒绝。
 
 采用系统 scp/SFTP，暂存文件以编号命名，避免把用户文件名交给远端 shell 或 glob 解释。
 目录内容合并进精确目标目录，保留空目录，不删除无关文件，不随目标存在与否改变层级。
@@ -68,7 +121,7 @@ attach 的就绪检查依据远端 tmux 实际 client PID，避免仅因探测�
 
 符号链接和特殊文件在第一版明确拒绝。UTF-8 字节保持原样，不自动重命名或统一 Unicode
 形式。Mac 目标在写入前保守拒绝大小写和规范化等价名称，以免发生别名覆盖。
-断线可能使远端暂存目录未能清理，错误会给出 transfer ID；可通过 local transfer abort 清理
+断线可能使远端暂存目录未能清理，错误会给出 transfer ID；可通过 api transfer abort 清理
 经 receipt 验证的本次暂存目录，不扫描删除其他目录。
 
 ## SSHFS 生命周期与 Mac 兼容
@@ -107,15 +160,10 @@ setup 自动读取已有连接，也支持使用现有 identity/agent 创建私�
 
 ## 验证与回退
 
-Shell 补全复用 Cobra 的 Bash V2 / zsh 脚本生成和隐藏补全协议。注册服务器、项目、SSH 别名及定义 ID 的候选函数；远端项目来自 `project list` 原始定义，批模式 SSH 查询限时 1.5 秒，避免终端 Tab 等待交互认证或输出诊断。Bash 脚本提供私有帮助函数，兼容未安装 bash-completion 的环境。文件传输的本机路径继续使用 shell 文件补全。
+Shell 补全复用 Cobra 的 Bash V2 / zsh 脚本生成和隐藏补全协议。注册服务器、项目、SSH 别名及定义 ID 的候选函数；远端项目来自 `api project list` 原始定义，批模式 SSH 查询限时 1.5 秒，避免终端 Tab 等待交互认证或输出诊断。Bash 脚本提供私有帮助函数，兼容未安装 bash-completion 的环境。文件传输的本机路径继续使用 shell 文件补全。
 安装器成功安装后可配置补全：管道脚本通过 `/dev/tty` 询问，支持显式选择或跳过；本机二进制 install 也提供对应选项。`completion install` 复用 shellpath 的备份、权限、符号链接及并发保护，在独立 completion 管理区块中加载绝对路径的二进制。共享 `.profile` 保持 POSIX sh 语法，并仅在匹配的交互 shell 中加载补全。
 
-客户端项目管理使用已有远端 `project/config/window/forward` 协议，兼容已发布远端。
-`tdev create` 提供逐项问答，setup 保存空服务器后也可立即创建；旧的 `project create` 入口保持兼容。输入目录经远端验证和规范化，支持 `~/`、UTF-8、空格与引号。创建默认 shell 窗口。
-交互 open 收到远端 PROJECT_NOT_FOUND 时复用创建向导，成功后继续 ensure、恢复转发和 attach。拒绝返回退出码 3，取消返回 130；JSON 和无终端调用保持非交互要求。
-向导终端输入使用 Bubble Tea 和 Bubbles textinput，支持光标移动、Home/End 和删除，输入历史保持关闭。标签与可横向滚动的输入分行显示，候选菜单最多七行并随终端尺寸收缩，长名称仅在展示时截断。终端模式、换行和光标恢复统一由渲染器管理。远端目录 Tab 补全经 SSH 异步只读枚举，支持 `~/`、绝对路径和多候选选择；编辑后丢弃旧查询结果。查询使用批模式、3 秒超时和候选数量上限，路径参数经过 shell 引用，候选以 NUL 分隔。提交、Ctrl-D、Ctrl-C 和外部信号均恢复终端设置。
-创建项目未指定服务器时，先选择已保存的服务器，默认项可回车确认；选择只作用于本次创建。`--server` 和 `server/project` 可显式指定目标，脚本调用必须明确服务器与目录。
-`project show/update` 编辑原始远端定义，窗口与共享转发管理自动带上读取时的 revision；完整 stdin 替换要求显式 expected-revision。本机 override 保持独立。配置修改只影响后续会话创建。
+Shell 补全提供 local 与远端前缀，裸项目前缀并发查询全部目标，远端查询保持 1.5 秒上限。客户端项目管理通过新 API 读写，旧版服务端需要升级。向导终端输入使用 Bubble Tea/Bubbles，远端目录只读枚举，候选使用 NUL 分隔，过期查询结果丢弃。输入历史关闭，取消和外部信号恢复终端设置。
 
 实际结果和待验证项见[验收记录](acceptance.md)。构建使用 Go 1.27.3，依赖记录于
 go.mod/go.sum。运行产物无需 Go。

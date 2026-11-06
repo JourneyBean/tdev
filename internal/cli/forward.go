@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 
 	"github.com/spf13/cobra"
-	"go.yaml.in/yaml/v3"
 	"tdev/internal/config"
 	"tdev/internal/forward"
 	"tdev/internal/protocol"
+	"tdev/internal/reconnect"
 )
 
 func (a *app) forwardCommand() {
@@ -22,28 +20,29 @@ func (a *app) forwardCommand() {
 		if len(args) > 0 {
 			arg = args[0]
 		}
-		if arg != "" && !strings.Contains(arg, "/") {
-			if _, err := config.ParseForward("L", arg); err == nil {
-				_ = c.Flags().Set("local", arg)
-				arg = ""
-			}
-		}
-		fs, err := readForwards(c)
-		if err != nil {
-			return err
-		}
 		t, err := a.resolve(c.Context(), arg, true)
 		if err != nil {
 			return err
-		}
-		if t.Local {
-			return config.Invalid("forwarding requires an explicit server/project on this machine")
 		}
 		p, err := a.get(c.Context(), t)
 		if err != nil {
 			return err
 		}
-		// Validate the full batch, including listener collisions, before saving or starting anything.
+		var fs []config.Forward
+		if c.Flags().Changed("local") || c.Flags().Changed("reverse") {
+			fs, err = readForwards(c)
+		} else {
+			var effective config.Project
+			effective, err = a.effective(t, p)
+			fs = effective.Forwards
+		}
+		if err != nil {
+			return err
+		}
+		if len(fs) == 0 {
+			return config.Invalid("project has no saved forwards; use tdev forward add")
+		}
+		// Validate the full batch, including listener collisions, before starting any listeners.
 		check := p
 		check.Forwards = nil
 		appendForwards(&check, fs)
@@ -55,37 +54,7 @@ func (a *app) forwardCommand() {
 		if err != nil {
 			return err
 		}
-		save, _ := c.Flags().GetBool("save")
-		saveRemote, _ := c.Flags().GetBool("save-remote")
-		if save && saveRemote {
-			return config.Invalid("choose --save or --save-remote")
-		}
-		saved := false
-		if save {
-			if err = a.saveOverride(c.Context(), t, p, func(o *projectOverride) error { return saveLocalForwards(p, o, fs) }); err != nil {
-				return err
-			}
-			saved = true
-			fmt.Fprintf(a.errOut, "Mappings saved on this client for %s/%s.\n", t.Name, p.Name)
-		}
-		if saveRemote {
-			for _, f := range fs {
-				if f.Direction == "R" {
-					if err = a.confirm("Save reverse forwards? Multiple clients may compete for remote listeners; traffic reaches the client that establishes each listener."); err != nil {
-						return err
-					}
-					break
-				}
-			}
-			appendForwards(&p, fs)
-			b, _ := yaml.Marshal(p)
-			if _, err = a.call(c.Context(), t, b, "config", "set", p.Name, "--stdin", "--expected-revision", strconv.Itoa(p.Revision)); err != nil {
-				return err
-			}
-			saved = true
-			fmt.Fprintf(a.errOut, "Definitions saved on %s/%s. Listener status follows independently.\n", t.Name, p.Name)
-		}
-		g := forward.Start(c.Context(), t.Server.SSHAlias, t.SSH, fs, policy)
+		g := startProjectForwards(c.Context(), t, fs, policy)
 		defer g.Close()
 		states := map[string]forward.Event{}
 		for e := range g.Events {
@@ -95,76 +64,17 @@ func (a *app) forwardCommand() {
 			}
 		}
 		if failure := g.Failure(); failure != nil {
-			code := 6
-			if saved {
-				code = 9
-			}
-			return &protocol.Error{Code: map[bool]string{true: "PARTIAL_SUCCESS", false: "CONNECTION_FAILED"}[saved], Exit: code, Message: failure.Error(), Details: map[string]any{"saved": saved, "forwards": states}}
+			return &protocol.Error{Code: "CONNECTION_FAILED", Exit: 6, Message: failure.Error(), Details: map[string]any{"forwards": states}}
 		}
 		if c.Context().Err() != nil {
-			return protocol.Fail("CANCELLED", 130, "forwarding cancelled; saved definitions are retained")
+			return protocol.Fail("CANCELLED", 130, "forwarding cancelled")
 		}
 		return nil
 	}}
 	a.root.AddCommand(c)
+	a.forwardDefinitions(c)
 	forwardFlags(c)
 	retryFlags(c)
-	c.Flags().Bool("save", false, "save -L mappings as this client's project overrides")
-	c.Flags().Bool("save-remote", false, "save shared project definitions on the server (including -R)")
-}
-
-func saveLocalForwards(remote config.Project, override *projectOverride, forwards []config.Forward) error {
-	if override.ProjectID != "" && override.ProjectID != remote.ID {
-		return config.Invalid("project identity changed; reset local overrides first")
-	}
-	override.ProjectID = remote.ID
-	if override.Forwards == nil {
-		override.Forwards = map[string]forwardOverride{}
-	}
-	for _, f := range forwards {
-		if f.Direction != "L" {
-			return config.Invalid("--save stores client-only -L mappings; use --save-remote for shared -R definitions")
-		}
-		var matches []config.Forward
-		for _, original := range remote.Forwards {
-			if original.Direction == "L" && original.TargetHost == f.TargetHost && original.TargetPort == f.TargetPort {
-				matches = append(matches, original)
-			}
-		}
-		if len(matches) > 1 {
-			return config.Invalid("multiple remote mappings use this target; select a stable ID with tdev override --forward")
-		}
-		if len(matches) == 1 {
-			original := matches[0]
-			patch := forwardOverride{}
-			if f.ListenPort != original.ListenPort {
-				port := f.ListenPort
-				patch.ListenPort = &port
-			}
-			if f.BindAddress != original.BindAddress {
-				bind := f.BindAddress
-				patch.BindAddress = &bind
-			}
-			if patch.ListenPort == nil && patch.BindAddress == nil {
-				delete(override.Forwards, original.ID)
-			} else {
-				override.Forwards[original.ID] = patch
-			}
-		} else {
-			duplicate := false
-			for _, old := range override.LocalForwards {
-				if old.Spec() == f.Spec() {
-					duplicate = true
-					break
-				}
-			}
-			if !duplicate {
-				override.LocalForwards = append(override.LocalForwards, f)
-			}
-		}
-	}
-	_, err := mergeProject(remote, *override)
-	return err
 }
 
 // Background forwarding events are written only to a private log, never to the live terminal.
@@ -184,7 +94,7 @@ func (a *app) openForwards(ctx context.Context, t target, fs []config.Forward) (
 		log.Close()
 		return nil, err
 	}
-	g := forward.Start(ctx, t.Server.SSHAlias, t.SSH, fs, t.Reconnect.Forward)
+	g := startProjectForwards(ctx, t, fs, t.Reconnect.Forward)
 	initial := make(chan forward.Event, len(fs))
 	done := make(chan struct{})
 	go func() {
@@ -220,4 +130,115 @@ func (a *app) openForwards(ctx context.Context, t target, fs []config.Forward) (
 		}
 	}
 	return cleanup, nil
+}
+
+func startProjectForwards(ctx context.Context, t target, fs []config.Forward, policy reconnect.Policy) *forward.Group {
+	if t.Local {
+		return forward.StartLocal(ctx, fs)
+	}
+	return forward.Start(ctx, t.Server.SSHAlias, t.SSH, fs, policy)
+}
+func (a *app) forwardDefinitions(parent *cobra.Command) {
+	add := a.command(parent, "add <project>", "Save project forwarding definitions", cobra.ExactArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
+		t, err := a.resolve(ctx, args[0], false)
+		if err != nil {
+			return nil, err
+		}
+		p, err := a.get(ctx, t)
+		if err != nil {
+			return nil, err
+		}
+		rev := p.Revision
+		if expected(c) > 0 && expected(c) != rev {
+			return nil, protocol.Fail("CONFIG_CONFLICT", 4, "project configuration changed")
+		}
+		var override projectOverride
+		if c.Flags().Changed("local") || c.Flags().Changed("reverse") {
+			fs, err := readForwards(c)
+			if err != nil {
+				return nil, err
+			}
+			appendForwards(&p, fs)
+		} else {
+			if a.json || !terminalAvailable(a.in) {
+				return nil, config.Invalid("specify -L or -R without a terminal")
+			}
+			f, o, err := a.forwardWizard(ctx, t, p.ID, config.Forward{}, t.Server.Projects[p.Name])
+			if err != nil {
+				return nil, err
+			}
+			p.Forwards = append(p.Forwards, f)
+			override = o
+			if err = a.confirm("Save this project forwarding definition?"); err != nil {
+				return nil, err
+			}
+		}
+		if _, err = mergeProject(p, override); err != nil {
+			return nil, err
+		}
+		result, err := a.writeProject(ctx, t, p, rev)
+		if err != nil {
+			return nil, err
+		}
+		if override.ProjectID != "" {
+			if err = a.saveOverride(ctx, t, p, func(o *projectOverride) error { *o = override; return nil }); err != nil {
+				return nil, protocol.Fail("PARTIAL_SUCCESS", 9, "forward saved; client override failed: %v", err)
+			}
+		}
+		return result, nil
+	})
+	forwardFlags(add)
+	revision(add)
+	remove := a.command(parent, "remove <project>", "Remove a saved project forwarding definition", cobra.ExactArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
+		t, err := a.resolve(ctx, args[0], false)
+		if err != nil {
+			return nil, err
+		}
+		p, err := a.get(ctx, t)
+		if err != nil {
+			return nil, err
+		}
+		id, _ := c.Flags().GetString("id")
+		if id == "" {
+			if a.json || !terminalAvailable(a.in) {
+				return nil, config.Invalid("--id is required without a terminal")
+			}
+			for _, f := range p.Forwards {
+				fmt.Fprintf(a.errOut, "%s -%s %s\n", f.ID, f.Direction, f.Spec())
+			}
+			id, err = a.prompt(ctx, "移除映射 ID", "")
+			if err != nil {
+				return nil, err
+			}
+		}
+		if expected(c) > 0 && expected(c) != p.Revision {
+			return nil, protocol.Fail("CONFIG_CONFLICT", 4, "project configuration changed")
+		}
+		found := false
+		kept := []config.Forward{}
+		for _, f := range p.Forwards {
+			if f.ID == id {
+				found = true
+			} else {
+				kept = append(kept, f)
+			}
+		}
+		if !found {
+			return nil, protocol.Fail("FORWARD_NOT_FOUND", 2, "forward not found")
+		}
+		p.Forwards = kept
+		result, err := a.writeProject(ctx, t, p, p.Revision)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := t.Server.Projects[p.Name].Forwards[id]; ok {
+			err = a.saveOverride(ctx, t, p, func(o *projectOverride) error { delete(o.Forwards, id); return nil })
+			if err != nil {
+				return nil, protocol.Fail("PARTIAL_SUCCESS", 9, "forward removed; client override cleanup failed: %v", err)
+			}
+		}
+		return result, nil
+	})
+	remove.Flags().String("id", "", "stable forwarding definition ID")
+	revision(remove)
 }

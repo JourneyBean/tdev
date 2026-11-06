@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -40,7 +41,11 @@ func buildCLI(t *testing.T, version string) string {
 }
 func executeBinary(t *testing.T, binary, root, sshConfig, input string, want int, args ...string) protocol.Response {
 	t.Helper()
-	argv := append([]string{"--config-dir", root, "--ssh-config", sshConfig, "--json"}, args...)
+	argv := []string{"--config-dir", root, "--json"}
+	if len(args) == 0 || args[0] != "api" {
+		argv = append(argv, "--ssh-config", sshConfig)
+	}
+	argv = append(argv, args...)
 	cmd := exec.Command(binary, argv...)
 	cmd.Stdin = strings.NewReader(input)
 	var stdout, stderr bytes.Buffer
@@ -61,6 +66,25 @@ func executeBinary(t *testing.T, binary, root, sshConfig, input string, want int
 	var r protocol.Response
 	if err = json.Unmarshal(stdout.Bytes(), &r); err != nil {
 		t.Fatalf("not one JSON response: %q (%s)", stdout.String(), stderr.String())
+	}
+	if len(args) > 0 && args[0] == "setup" && code == 0 {
+		t.Cleanup(func() {
+			a := &app{store: config.Store{Root: root}, sshConfig: sshConfig}
+			prefs, err := a.prefs()
+			if err != nil {
+				return
+			}
+			for _, name := range orderedServers(prefs) {
+				target, err := a.serverTarget(prefs, name, "")
+				if err != nil {
+					continue
+				}
+				path, err := a.listingCachePath(target)
+				if err == nil {
+					_ = os.Remove(path)
+				}
+			}
+		})
 	}
 	return r
 }
@@ -208,19 +232,66 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 		if b, _ := os.ReadFile(filepath.Join(target, "unrelated")); string(b) != "keep" {
 			t.Fatal("deleted unrelated remote file")
 		}
+		// Single-file destinations may name an existing directory, including ./.
+		downloadDir := t.TempDir()
+		pullFile := func(want int, input string, extra ...string) {
+			t.Helper()
+			argv := []string{"--config-dir", root, "--ssh-config", s.Config, "--json", "pull", "demo", "target with spaces/" + name, "./"}
+			cmd := exec.Command(binary, append(argv, extra...)...)
+			cmd.Dir = downloadDir
+			cmd.Stdin = strings.NewReader(input)
+			output, err := cmd.CombinedOutput()
+			code := 0
+			if err != nil {
+				if exit, ok := err.(*exec.ExitError); ok {
+					code = exit.ExitCode()
+				} else {
+					t.Fatal(err)
+				}
+			}
+			if code != want {
+				t.Fatalf("file pull to ./ exit=%d want=%d output=%s", code, want, output)
+			}
+		}
+		pullFile(0, "")
+		if b, err := os.ReadFile(filepath.Join(downloadDir, name)); err != nil || string(b) != "payload" {
+			t.Fatalf("file pull lost basename/content: %q %v", b, err)
+		}
+		pullFile(130, "no\n")
+		pullFile(0, "", "-y")
+		uploadDir := filepath.Join(projectDir, "single-file uploads")
+		if err = os.Mkdir(uploadDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		executeBinary(t, binary, root, s.Config, "", 0, "push", "demo", filepath.Join(source, name), "single-file uploads/")
+		if b, err := os.ReadFile(filepath.Join(uploadDir, name)); err != nil || string(b) != "payload" {
+			t.Fatalf("file push lost basename/content: %q %v", b, err)
+		}
 	})
 	t.Run("native_terminal_ctrl_c_resize_and_two_outages", func(t *testing.T) {
-		p := terminalCLI(t, binary, root, s.Config, "open", "demo")
+		p := terminalCLI(t, binary, root, s.Config, "open", "demo", "--reconnect-interval", "500ms")
+		p.waitText(t, "\x1b]2;tdev: fixture/demo\x07")
 		p.write(t, "printf 'TDEV_READY_ONE\\n'\r")
 		p.waitText(t, "TDEV_READY_ONE\r\n")
 		p.write(t, "printf 'TDEV_CJK_中文_日本語_한글_🙂\\n'\r")
 		p.waitText(t, "TDEV_CJK_中文_日本語_한글_🙂\r\n")
-		time.Sleep(1200 * time.Millisecond)
 		for n := 1; n <= 2; n++ {
+			if n == 2 {
+				// Terminal output can arrive before the client's SSH readiness query.
+				// Allow time for that query and the one-second stable window.
+				time.Sleep(3 * time.Second)
+			}
 			before := len(p.output.String())
 			s.Offline(true)
 			deadline := time.Now().Add(8 * time.Second)
-			for !strings.Contains(p.output.String()[min(before, len(p.output.String())):], "Connection lost.") {
+			for {
+				output := p.output.String()[before:]
+				if strings.Contains(output, "Connection lost. Retrying in 500ms [1].") {
+					break
+				}
+				if strings.Contains(output, "Connection lost. Retrying in 500ms [2].") {
+					t.Fatalf("stable attachment did not reset the retry budget: %q", output)
+				}
 				if time.Now().After(deadline) {
 					t.Fatalf("disconnect not detected: %q", p.output.String())
 				}
@@ -230,9 +301,9 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 			marker := fmt.Sprintf("TDEV_RESTORED_%d", n)
 			p.write(t, "printf '"+marker+"\\n'\r")
 			p.waitText(t, marker+"\r\n")
-			p.write(t, "printf 'TDEV_CJK_重连_日本語_한글\\n'\r")
-			p.waitText(t, "TDEV_CJK_重连_日本語_한글\r\n")
-			time.Sleep(1200 * time.Millisecond)
+			cjk := fmt.Sprintf("TDEV_CJK_重连_日本語_한글_%d", n)
+			p.write(t, "printf '"+cjk+"\\n'\r")
+			p.waitText(t, cjk+"\r\n")
 		}
 		p.write(t, "sleep 30\r")
 		time.Sleep(100 * time.Millisecond)
@@ -412,6 +483,26 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 		if err = update.Candidate(context.Background(), remoteBin, "0.1.0-dev"); err != nil {
 			t.Fatal(err)
 		}
+		t.Run("upgrade_without_old_api_preserves_trusted_key", func(t *testing.T) {
+			old := []byte("#!/bin/sh\nif [ \"$1\" = --json ] && [ \"$2\" = version ]; then printf '%s\\n' '{\"protocol_version\":1,\"ok\":true,\"data\":{\"version\":\"0.0.3\"}}'; exit 0; fi\nexit 2\n")
+			receipt, err := update.ReadReceipt(remoteBin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			receipt.Version = "0.0.3"
+			receipt.SHA256 = fmt.Sprintf("%x", sha256.Sum256(old))
+			metadata, _ := json.Marshal(receipt)
+			if err = config.AtomicWrite(remoteBin, old, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err = config.AtomicWrite(update.ReceiptPath(remoteBin), metadata, 0600); err != nil {
+				t.Fatal(err)
+			}
+			executeBinary(t, binary, root, s.Config, "", 0, "upgrade", "--remote", "installed", "--release-dir", v2, "-y")
+			if err = update.Candidate(context.Background(), remoteBin, "0.1.1-dev"); err != nil {
+				t.Fatal(err)
+			}
+		})
 	})
 	t.Run("retry_counts_auth_host_keys_and_connect_cancel", func(t *testing.T) {
 		for _, attempts := range []string{"0", "2"} {
@@ -485,4 +576,14 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 		p.write(t, "\x03")
 		p.exit(t, 130)
 	})
+}
+
+func finishProjectWizard(t *testing.T, p *terminalProcess) {
+	t.Helper()
+	p.waitText(t, "配置启动窗口？")
+	p.write(t, "n\r")
+	p.waitText(t, "添加端口映射？")
+	p.write(t, "n\r")
+	p.waitText(t, "保存项目配置？")
+	p.write(t, "y\r")
 }

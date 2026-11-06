@@ -168,14 +168,6 @@ func (a *app) chooseConnection(ctx context.Context, c *cobra.Command, p preferen
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	if p.DefaultServer != "" {
-		for i, name := range names {
-			if name == p.DefaultServer {
-				names = append([]string{name}, append(names[:i], names[i+1:]...)...)
-				break
-			}
-		}
-	}
 	seen := map[string]bool{}
 	label := func(host sshx.HostEntry) string {
 		name := host.HostName
@@ -328,7 +320,7 @@ func (a *app) chooseName(ctx context.Context, c *cobra.Command, p preferences, s
 		if err != nil {
 			return "", err
 		}
-		if config.ValidName(answer) && p.Servers[answer].SSHAlias == "" {
+		if answer != "local" && config.ValidName(answer) && p.Servers[answer].SSHAlias == "" {
 			return answer, nil
 		}
 		fmt.Fprintln(a.errOut, "使用未占用的英文字母、数字、短横线或下划线名称。")
@@ -457,25 +449,13 @@ func (a *app) runSetup(ctx context.Context, c *cobra.Command) (any, error) {
 			return nil, err
 		}
 	}
-	if err = a.handshake(ctx, t, "session-v1", "attachment-v1"); err != nil {
-		return nil, err
+	responses, err := a.calls(ctx, t, nil, []string{"doctor"}, []string{"project", "list"})
+	if err != nil {
+		return nil, fmt.Errorf("server dependencies or API are not ready: %w", err)
 	}
-	if _, err = a.call(ctx, t, nil, "doctor"); err != nil {
-		return nil, fmt.Errorf("remote dependencies are not ready (tmux is required): %w", err)
-	}
-	// Read target definitions without caching them into client.yaml.
-	data, err := a.call(ctx, t, nil, "project", "list", "--status")
+	projects, err := decodeProjectDefinitions(responses[1])
 	if err != nil {
 		return nil, err
-	}
-	var projects []discoveredProject
-	if err = json.Unmarshal(data, &projects); err != nil {
-		return nil, err
-	}
-	for _, project := range projects {
-		if err = project.Project.Validate(); err != nil {
-			return nil, err
-		}
 	}
 	if interactive {
 		fmt.Fprintf(a.errOut, "✓ 读取远端已有配置，发现 %d 个项目\n", len(projects))
@@ -497,39 +477,10 @@ func (a *app) runSetup(ctx context.Context, c *cobra.Command) (any, error) {
 			return nil, err
 		}
 	}
-	unlock, err := a.store.Lock(ctx, "client", "config")
-	if err != nil {
+	if err = a.saveSetupConnection(ctx, c, name, s, oldServer, existed); err != nil {
 		return nil, err
 	}
-	defer unlock()
-	latest := defaultPreferences()
-	if _, err = os.Stat(configPath); err == nil {
-		latest, err = a.prefs()
-		if err != nil {
-			return nil, err
-		}
-	} else if !os.IsNotExist(err) {
-		return nil, err
-	}
-	current, stillExists := latest.Servers[name]
-	if existed != stillExists || (existed && !reflect.DeepEqual(current, oldServer)) {
-		return nil, protocol.Fail("CONFIG_CONFLICT", 4, "server registration changed during setup; retry")
-	}
-	if err = applySetupPolicies(c, &latest); err != nil {
-		return nil, err
-	}
-	latest.Servers[name] = s
-	latest.DefaultServer = name
-	b, err := yaml.Marshal(latest)
-	if err != nil {
-		return nil, err
-	}
-	if err = a.writeOverrides(name, s.Projects); err != nil {
-		return nil, err
-	}
-	if err = config.AtomicWrite(configPath, b, 0600); err != nil {
-		return nil, protocol.Fail("PARTIAL_SUCCESS", 9, "local overrides saved; connection registration could not be saved: %v", err)
-	}
+	a.saveListingCache(t, projects)
 	keep = true
 	if interactive {
 		fmt.Fprintf(a.errOut, "\n✓ 已保存连接 %s\n接下来运行：\n  tdev ls\n", name)
@@ -545,13 +496,15 @@ func (a *app) runSetup(ctx context.Context, c *cobra.Command) (any, error) {
 				if _, err = a.createRemoteProject(ctx, t, "", true); err != nil {
 					return nil, protocol.Fail("PARTIAL_SUCCESS", 9, "connection saved; project creation did not complete: %v", err)
 				}
-				data, err := a.call(ctx, t, nil, "project", "list", "--status")
+				data, err := a.call(ctx, t, nil, "project", "list")
 				if err != nil {
 					return nil, err
 				}
-				if err = json.Unmarshal(data, &projects); err != nil {
+				projects, err = decodeProjectDefinitions(data)
+				if err != nil {
 					return nil, err
 				}
+				a.saveListingCache(t, projects)
 				if len(projects) > 0 {
 					fmt.Fprintf(a.errOut, "接下来运行：\n  tdev open %s/%s\n", name, projects[0].Project.Name)
 				}
@@ -559,6 +512,44 @@ func (a *app) runSetup(ctx context.Context, c *cobra.Command) (any, error) {
 		}
 	}
 	return map[string]any{"server": name, "ssh_alias": s.SSHAlias, "projects": projects}, nil
+}
+
+// Save under the client lock, then release it before any project wizard or SSH calls.
+func (a *app) saveSetupConnection(ctx context.Context, c *cobra.Command, name string, s, oldServer server, existed bool) error {
+	configPath := filepath.Join(a.store.Root, "client.yaml")
+	unlock, err := a.store.Lock(ctx, "client", "config")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	latest := defaultPreferences()
+	if _, err = os.Stat(configPath); err == nil {
+		latest, err = a.prefs()
+		if err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	current, stillExists := latest.Servers[name]
+	if existed != stillExists || (existed && !reflect.DeepEqual(current, oldServer)) {
+		return protocol.Fail("CONFIG_CONFLICT", 4, "server registration changed during setup; retry")
+	}
+	if err = applySetupPolicies(c, &latest); err != nil {
+		return err
+	}
+	latest.Servers[name] = s
+	b, err := yaml.Marshal(latest)
+	if err != nil {
+		return err
+	}
+	if err = a.writeOverrides(name, s.Projects); err != nil {
+		return err
+	}
+	if err = config.AtomicWrite(configPath, b, 0600); err != nil {
+		return protocol.Fail("PARTIAL_SUCCESS", 9, "local overrides saved; connection registration could not be saved: %v", err)
+	}
+	return nil
 }
 
 func (a *app) wizardPorts(ctx context.Context, s server, projects []discoveredProject) (server, error) {

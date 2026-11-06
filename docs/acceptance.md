@@ -1,8 +1,70 @@
-# 第一版开发验收记录
+# 开发验收记录
 
-Last verified: 2026-11-03。发布目标版本：0.0.3。下表保留集成验收使用的开发版版本号。
+Last verified: 2026-11-06。源码版本：0.2.0。下表保留集成验收使用的开发版版本号。
 
 本记录汇总第一版核心功能的自动化验证、环境实测和待验证项。
+
+## GitLab CI 发布验收
+
+连续断线重连用例在 Linux 上启用竞态检测连续通过 5 次，使用真实隔离 SSH/tmux。两次断线都从第 1 次重试开始，并各自验证恢复后的多语言终端输出。基于发布源码的修复通过 `make check` 与完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...`，CLI 测试用时约 118 秒。
+
+2026-11-06：固定源码快照完成 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...`、`go vet ./...`、四平台 `make cross` 和 `make build`，CLI 集成约 123 秒，包含真实隔离 SSH/tmux。工作区的 `make check`、新增脚本语法与格式检查、diff 检查通过；GitLab YAML 已用仓库现有 YAML 解析器检查，官方 Go CI 镜像标签可解析。
+
+新增 TLS 模拟 GitLab API 验证 14 个产物的上传与 Release 链接、部分上传失败后的续传、同版本摘要冲突保护、已有 Release 保留、鉴权失败、错误信息中的 token 排除及下载重定向移除 job token。篡改二进制、压缩包、清单签名和校验表均在网络请求前被拒绝。签名构建脚本测试覆盖受保护 tag、版本一致性、公钥匹配、调试追踪拒绝、临时密钥清理和原密钥保留。实际生成的安装脚本验证 GitHub 默认来源、GitLab 版本下载及 latest 升级来源、显式覆盖和 URL 引用；不安全来源被拒绝。
+
+尚未在实际 GitLab 项目执行流水线、实例 CI Lint、包上传及 Release 创建；Runner 权限、File 变量、受保护 tag、包存储和匿名下载地址需在目标项目完成首发验收。本轮原生验证环境为 Linux，macOS 产物完成交叉构建。
+
+## scratch 临时会话验收
+
+统一 open 入口（2026-11-06）：完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 123 秒；`make check`、四平台 `make cross` 和 `make build` 通过。帮助参数更新后补测命令边界与 scratch 补全通过。真实本机和隔离 SSH/PTY 验证 `open debug` 与 `open local/debug`、`open dev/debug` 恢复 scratch，远端缓存未收录的新名称通过实时查询找到。远端 scratch 在实际 SSH 断线后恢复，detach 后再次 open 正常；缓存中的已结束 scratch 返回 SESSION_NOT_FOUND。本机裸名称与带服务器前缀的同名项目/scratch 均返回 SESSION_CONFLICT，原 scratch 保持存在，项目会话保持 missing；scratch 配合 --mount 返回参数错误。旧 scratch --attach 参数返回未知参数错误；裸名称和带服务器前缀的 scratch 补全均通过。机器接口的 attach 保留为 SSH 终端传输入口。
+
+完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成用时约 117 秒；`make check`（含 go vet、gofmt 与 diff 检查）、四平台 `make cross` 和 `make build` 通过。
+
+2026-11-06：本机和隔离 SSH/PTY 的真实 tmux 用例通过，覆盖指定名称和目录创建、JSON 返回、默认唯一名称、64 字符名称、重名冲突、普通会话名称占用保护、项目归属隔离、按名称恢复、detach 后保留、最后一个 shell 退出后消失，以及失效 generation 拒绝附着。ls 覆盖全部、project/scratch 类型筛选、服务器筛选和远端离线时保留 scratch 缓存及时间戳。
+
+新增真实 PTY 回归确认 tmux 内创建 scratch 后 switch-client 进入新会话，原会话的 session ID、generation 和逻辑名称保持不变；标记命令显式指定新会话目标。远端附着经历实际 SSH 断线后恢复原会话，再 detach、按名称恢复及退出，均通过。原生执行环境为 Linux；macOS 仅交叉构建，原生 tmux 交互待对应环境实测。旧服务端缺少 scratch-v1 时沿用现有能力门禁，scratch_warning 升级提示分支尚无独立旧版本集成用例。
+
+## v0.2.0 版本验收
+
+2026-11-05：默认源码运行与 make build 产物的 JSON version 均返回 0.2.0，协议与 schema 继续为 1。完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 240s ./...`、`make check`、`make cross` 和 `make build` 通过；CLI 集成约 109 秒，包含真实隔离 SSH/tmux 和 zsh 目录补全回归。源码、构建默认值、README、安装说明及发布说明已复查。原生执行于 Linux，macOS 的 amd64/arm64 产物完成交叉构建。
+
+## v0.1.0 项目入口与 API 验收
+
+zsh 目录补全回归（2026-11-05）：诊断日志中的 shell_glob_no_match 定位到登录 shell 对未匹配目录通配符的处理。真实隔离 SSH 使用临时测试身份的强制命令将收到的命令交给 zsh，先复现原始 glob 错误，再验证通过 sh -c 执行的补全脚本。空目录、无匹配、~/proje、隐藏目录显式前缀，以及含中文、空格、引号和 shell 元字符的目录均通过；HOME 使用隔离测试目录。完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...`、`make check`、四平台 `make cross` 与 `make build` 通过，CLI 集成用时约 109 秒，真实 tmux 测试重新执行。已复查命令引用与相邻日志处理。原生执行于 Linux；macOS 完成交叉构建，用户设备上的最终复验待更新客户端后进行。
+
+诊断日志回归（2026-11-05）：完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 240s ./...` 通过，CLI 集成用时约 111 秒，包含真实隔离 SSH/tmux。新增真实 SSH/PTY 用例在目录编辑器就绪后关闭连接，验证 Tab 补全显示失败类别与日志位置、日志记录 CONNECTION_FAILED，Ctrl-C 正常退出，输入路径未进入日志。单元测试覆盖默认仅记录失败、--debug 成功记录、JSON 单一响应、0600/0700 权限、1 MiB 轮转及三个备份、并发追加、符号链接拒绝、日志失败保留操作结果、超时原因及进程退出码、原始错误和 stderr 内容排除。改动区域复查后调整命令错误归一化顺序，定向竞态回归确认日志错误码与最终 JSON 响应一致；`make check`、四平台 `make cross` 和 `make build` 通过。本轮原生执行于 Linux；macOS 日志文件与终端交互仅完成交叉构建。实际用户环境中的补全失败原因仍待新日志采集，未知原因按 operation_failed 记录。
+
+ls 缓存展示与 warning 回归（2026-11-05）：真实隔离 SSH/PTY 测试让远端请求等待文件门控，验证标准输入为 /dev/null、标准错误重定向到文件、仅标准输出为终端时，远端完成前即显示缓存及 syncing，放行后显示新增项目及 synced。本机项目刷新后同样保存缓存。真实 tmux 用例验证同名普通会话显示 [unmanaged,warning]，列表只保留一条 doctor 提示，JSON 与全局及指定项目 doctor 保留完整 warning；离线缓存及错误状态分类继续通过。完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...`、`make check`、`make build` 与四平台 `make cross` 通过，真实 tmux 集成测试已重新执行。原生终端验证执行于 Linux，macOS 原生显示待对应环境实测。
+
+setup 并发向导回归（2026-11-05）：真实隔离 SSH/PTY 验证客户端与服务端共用配置目录时，读取两个无转发项目后完成连接保存；首个项目提示等待输入时，配置锁可由另一调用取得，第二个终端的 setup 同样完成保存。完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 240s ./...`、`make check`、`make build` 与四平台 `make cross` 通过。本轮原生执行于 Linux。覆盖配置锁在连接提交后释放的边界；实际用户环境的远端目录补全失败尚未复现。
+
+tmux 查询边界回归（2026-11-05）：完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 240s ./...`、`make check`、四平台 `make cross` 和 `make build` 通过。真实隔离 SSH/PTY 验证拒绝会话状态 API 的远端仍可完成 setup、向导创建首个项目及随后的项目刷新；setup 的会话状态为 unknown。同一环境验证 show/create/edit、override、forward add/remove、项目补全和 pull/push；sh --json 完成真实 tmux 窗口创建，省去额外 session status 请求。代码检查确认 ls 与显式 project list --status 保留状态查询，open/sh attach、save/stop 及 attachment 保留对应会话校验；省略项目名时保留当前 tmux 项目标记读取。doctor 与安装检查保留 tmux 程序依赖检查。此次查询边界用例原生执行于 Linux，macOS 原生交互范围见环境验证记录。
+
+传输目标解析回归（2026-11-05）：完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 240s ./...`、`make check`、四平台 `make cross` 和 `make build` 通过。真实隔离 SSH/SFTP 验证旧版远端的会话状态查询继续返回 SESSION_CONFLICT 时，客户端在无索引缓存的情况下，以裸项目名和完整 server/project 标识完成 pull/push，文件内容一致。裸名称查找跳过前序服务器的 PROJECT_NOT_FOUND，并定位正确目标；解析与传输全程使用项目定义，独立于 tmux 状态。此用例用包装程序模拟旧版状态错误，其余 API 和 SFTP 均实际执行。
+
+会话 warning 回归（2026-11-05）：完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 240s ./...`、`make check`、四平台 `make cross` 和 `make build` 通过。真实隔离 SSH/tmux 验证本机与远端同名普通会话显示 unmanaged 和 warning，列表返回 0、服务器保持 synced，其他项目继续展示；远端应用错误标记 error 并保留缓存。真实 PTY 验证 open 创建独立托管会话后可操作和 detach，原同名会话保持存在。tmux 回归验证 UUID 识别旧版命名、复用时保留 generation、停止仅影响托管会话；重复 UUID 查询返回 warning，停止操作保留所有会话。本轮原生执行环境为 Linux，macOS 完成交叉构建，原生 tmux 交互待对应环境实测。
+
+终端标题回归（2026-11-05）：完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 240s ./...`、`go vet ./...`、格式与 diff 检查、`make cross` 和 `make build` 通过。本机与远端 `open` 的真实 PTY/tmux 用例检查 OSC 2 序列，标题分别为 `tdev: local/demo` 和 `tdev: fixture/demo`。终端模拟器的标题展示及用户 shell/tmux 后续修改标题的交互待人工验证。
+
+旧入口清理回归（2026-11-05）：完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 240s ./...`、`make check`、四平台 `make cross` 和 `make build` 通过。已有 default_server 字段可读取但被丢弃，序列化不再输出；旧字段重复和其他未知字段继续拒绝。真实 SSH/PTY 项目管理验证 setup 新配置无默认服务器字段，补全只注册转发 ID。forward 的旧保存参数返回 INVALID_ARGUMENT，数字项目名按项目解析。最终 bin/tdev 对数字项目运行保存映射与 override，真实 TCP echo 成功，Ctrl-C 后清理，项目定义和覆盖文件内容保持不变。
+
+单文件目录目标回归：真实隔离 SSH 验证 pull 将带中文、空格和引号的远端文件下载到当前目录 ./，保留文件名与内容；已有文件拒绝覆盖返回 130，-y 确认覆盖成功。push 到已有远端目录同样保留文件名。传输单元测试覆盖显式文件名、覆盖计数、并发目标变化、非法 basename 和符号链接拒绝；原目录内容合并行为继续通过。重建后的 bin/tdev 使用实际 darwin-arm64 产物完成同形式 pull 到 ./ 的独立冒烟，文件名、SHA-256 与确认覆盖均通过；完整竞态回归、make check 和四平台构建复验通过。
+
+最终构建产物独立冒烟（2026-11-04）：直接运行 bin/tdev，使用临时配置、临时 SSH 身份、隔离 sshd 和两个私有 tmux socket，全部通过。覆盖本机无需 setup 创建、main 默认窗口、session 项目名、sh --name --save、真实 PTY open/detach、save、show/edit、forward add/remove、UTF-8 文件 push/pull；远端覆盖 setup、create、API、真实 PTY open/detach、命名窗口和文件往返。本机与远端同名项目同时存在时，ls 正确区分位置；stop 后会话 missing。关闭隔离 sshd 后，ls 返回部分失败并保留带时间的远端缓存，本机结果正常。旧 local/project/window 用户入口返回参数错误。测试配置、身份、缓存与会话已清理；本轮未执行真实 FUSE 挂载。
+
+2026-11-04：最终 `TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 240s ./...`、`make check`、`make cross` 与 `make build` 全部通过。CLI 竞态回归用时约 89 秒；四平台为 Linux/macOS 的 amd64/arm64。构建程序 version 返回 0.1.0。
+
+- 本机项目无需 setup：创建 main 窗口、同名 session、sh --name debug --save、列表位置标识、push/pull 内容校验与 stop 通过。真实 PTY 验证本机 open、Ctrl-C 中断前台程序和 detach。
+- 真实隔离 SSH 验证 shell 分段解析、写入 stdin 和 shell 特殊字符保持原值、revision 错误码。两项查询合并后实际只接受一次 SSH TCP 连接；单项写入也只接受一次。
+- 模拟旧版服务端返回 0.0.3，API gate 拒绝后显示版本及升级指引，后续 project set 未被调用。旧 API 不可用时通过 shell 读取安装凭据，保留原可信公钥并升级到签名候选版本。
+- ls 覆盖本机、空远端、有项目远端、--all、--server 与参数错误。真实 PTY 显示缓存和 syncing，随后输出 synced；新增项目刷新出现，离线保留两项目快照和原更新时间，恢复后再次同步。缓存文件权限为 0600。
+- 裸名称优先本机；远端名称可从缓存定位，目标离线时实际配置读取失败，保持目标身份。缓存仅用于展示和发现。
+- 真实 PTY 创建向导输入完整 localhost:8000，项目保存默认监听 8000，客户端保存 18000 override。edit 复用向导修改窗口名称和启动命令，revision 增加；原共享转发定义保持。
+- 普通 open 未调用 SSHFS；--mount 和独立 mount 调用私有模拟后端，验证显式触发和失败路径。此用例未执行真实 FUSE 挂载。
+- 本机 TCP 转发完成真实 echo 往返、端口冲突保留原监听、取消后清理。真实 tmux 验证同名未托管会话 warning，原会话保持存在。
+- 原有真实 SSH/tmux、连续断线重连、签名安装/升级/回滚、Bash/zsh 补全和 UTF-8 路径编辑回归保留。客户端参数与 API 边界、移除旧用户命令的行为均有验证。
+
+本轮原生执行环境为 Linux。macOS 新版 CLI、原生 tmux 与 SSHFS 挂载交互待对应环境实测；历史 Mac 挂载验证记录见下文。
 
 ## v0.0.3 向导与配置验收
 

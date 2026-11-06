@@ -4,8 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path"
-	"sort"
+	"net"
 	"strconv"
 	"strings"
 
@@ -15,192 +14,59 @@ import (
 	"tdev/internal/tmux"
 )
 
-// Client project management uses the same revision-checked remote API as local
-// administration. Raw remote definitions, rather than client overrides, are edited.
 func (a *app) projectCommands() {
-	p := group(a.root, "project", "Manage projects saved on a remote server")
-	list := a.command(p, "list", "Discover remote projects", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
-		return a.listProjects(ctx, c)
-	})
-	list.Flags().String("server", "", "only list this saved server")
-	list.Flags().Bool("all", false, "query every configured server")
-	createCommand := func() *cobra.Command {
-		create := &cobra.Command{Use: "create [server/project]", Short: "Create a remote project, with a wizard when directory is omitted", Args: cobra.MaximumNArgs(1), RunE: func(c *cobra.Command, args []string) error {
-			if a.timeout <= 0 {
-				return config.Invalid("timeout must be positive")
-			}
-			dir, _ := c.Flags().GetString("directory")
-			name, _ := c.Flags().GetString("server")
-			project := ""
-			if len(args) > 0 {
-				project = args[0]
-				if strings.Contains(project, "/") {
-					if c.Flags().Changed("server") {
-						return config.Invalid("choose --server or server/project")
-					}
-					parts := strings.Split(project, "/")
-					if len(parts) != 2 || parts[0] == "" {
-						return config.Invalid("expected server/project")
-					}
-					name, project = parts[0], parts[1]
+	create := &cobra.Command{Use: "create [server/project]", Short: "Create a project on this machine or a server", Args: cobra.MaximumNArgs(1), RunE: func(c *cobra.Command, args []string) error {
+		dir, _ := c.Flags().GetString("directory")
+		name, _ := c.Flags().GetString("server")
+		project := ""
+		if len(args) > 0 {
+			project = args[0]
+			if strings.Contains(project, "/") {
+				if c.Flags().Changed("server") {
+					return config.Invalid("choose --server or server/project")
 				}
-				if !config.ValidName(project) {
-					return config.Invalid("invalid project name")
+				parts := strings.Split(project, "/")
+				if len(parts) != 2 {
+					return config.Invalid("expected server/project")
 				}
+				name, project = parts[0], parts[1]
 			}
-			interactive := project == "" || dir == "" || name == ""
-			if interactive && (a.json || !terminalAvailable(a.in)) {
-				return config.Invalid("use tdev create <server/project> --directory <remote-directory> without a terminal")
+			if !config.ValidName(project) {
+				return config.Invalid("invalid project name")
 			}
-			prefs, err := a.prefs()
-			if err != nil {
-				return err
-			}
-			if name == "" {
-				name, err = a.chooseProjectServer(c.Context(), prefs)
+		}
+		interactive := project == "" || dir == ""
+		if interactive && (a.json || !terminalAvailable(a.in)) {
+			return config.Invalid("use tdev create [server/]project --directory PATH without a terminal")
+		}
+		prefs, err := a.prefs()
+		if err != nil {
+			return err
+		}
+		if name == "" {
+			name = "local"
+			if len(args) == 0 && !c.Flags().Changed("server") {
+				name, err = a.chooseServer(c.Context(), prefs, "选择项目所在服务器")
 				if err != nil {
 					return err
 				}
 			}
-			t, err := a.serverTarget(prefs, name, project)
-			if err != nil {
-				return err
-			}
-			created, err := a.createRemoteProject(c.Context(), t, dir, interactive)
-			if err == nil && interactive {
-				fmt.Fprintf(a.errOut, "接下来运行：\n  tdev open %s/%s\n", t.Name, created.Name)
-				return nil
-			}
-			return a.result(created, err)
-		}}
-		create.Flags().String("directory", "", "existing directory on the remote server")
-		create.Flags().String("server", "", "server for the project creation wizard")
-		return create
-	}
-	a.root.AddCommand(createCommand())
-	compatCreate := createCommand()
-	compatCreate.Hidden = true
-	p.AddCommand(compatCreate)
-	a.command(p, "show <server/project>", "Read the shared remote definition", cobra.ExactArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
-		t, err := a.resolve(ctx, args[0], false)
+		}
+		t, err := a.serverTarget(prefs, name, project)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		return a.get(ctx, t)
-	})
-	update := a.command(p, "update <server/project>", "Update the remote directory or replace a definition from stdin", cobra.ExactArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
-		t, err := a.resolve(ctx, args[0], false)
-		if err != nil {
-			return nil, err
+		p, err := a.createRemoteProject(c.Context(), t, dir, interactive)
+		if err == nil && interactive {
+			fmt.Fprintf(a.errOut, "接下来运行：\n  tdev open %s/%s\n", t.Name, p.Name)
+			return nil
 		}
-		current, err := a.get(ctx, t)
-		if err != nil {
-			return nil, err
-		}
-		if expected(c) > 0 && expected(c) != current.Revision {
-			return nil, protocol.Fail("CONFIG_CONFLICT", 4, "project configuration changed")
-		}
-		stdin, _ := c.Flags().GetBool("stdin")
-		if stdin {
-			if c.Flags().Changed("directory") {
-				return nil, config.Invalid("choose --stdin or --directory")
-			}
-			if expected(c) < 1 {
-				return nil, config.Invalid("--stdin requires --expected-revision from project show")
-			}
-			if err = a.read(&current); err != nil {
-				return nil, err
-			}
-			if current.Revision != expected(c) {
-				return nil, config.Invalid("input revision must equal expected revision")
-			}
-		} else {
-			if !c.Flags().Changed("directory") {
-				return nil, config.Invalid("provide --directory or --stdin")
-			}
-			dir, _ := c.Flags().GetString("directory")
-			current.Directory, err = a.remoteDirectory(ctx, t, dir)
-			if err != nil {
-				return nil, err
-			}
-		}
-		b, err := json.Marshal(current)
-		if err != nil {
-			return nil, err
-		}
-		return a.call(ctx, t, b, "config", "set", t.Project, "--stdin", "--expected-revision", strconv.Itoa(current.Revision))
-	})
-	update.Flags().String("directory", "", "existing remote project root")
-	update.Flags().Bool("stdin", false, "read a complete remote project definition as YAML/JSON")
-	revision(update)
-	// These commands intentionally edit shared remote definitions. Local listening
-	// port preferences remain available through tdev override.
-	w := group(p, "window", "Manage remote startup windows; changes apply to future sessions")
-	for _, op := range []string{"add", "update", "remove"} {
-		op := op
-		c := a.remoteDefinitionCommand(w, "window", op)
-		c.Flags().String("id", "", "stable window ID")
-		if op != "add" {
-			_ = c.MarkFlagRequired("id")
-		}
-		if op == "add" {
-			c.Flags().String("name", "", "window display name")
-			_ = c.MarkFlagRequired("name")
-			c.Flags().String("command", "", "shell startup command")
-			c.Flags().String("directory", ".", "remote directory relative to project root")
-		}
-		if op == "update" {
-			c.Flags().Bool("stdin", false, "read replacement window as YAML/JSON")
-			_ = c.MarkFlagRequired("stdin")
-		}
-	}
-	f := group(p, "forward", "Manage shared remote forwarding definitions")
-	add := a.remoteDefinitionCommand(f, "forward", "add")
-	forwardFlags(add)
-	remove := a.remoteDefinitionCommand(f, "forward", "remove")
-	remove.Flags().String("id", "", "stable forward ID")
-	_ = remove.MarkFlagRequired("id")
-}
-
-func (a *app) chooseProjectServer(ctx context.Context, prefs preferences) (string, error) {
-	names := make([]string, 0, len(prefs.Servers))
-	for name := range prefs.Servers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	if len(names) == 0 {
-		return "", protocol.Fail("SETUP_REQUIRED", 2, "run tdev setup to add a server")
-	}
-	fmt.Fprintln(a.errOut, "\n选择项目所在服务器：")
-	defaultIndex := "1"
-	for i, name := range names {
-		label := ""
-		if name == prefs.DefaultServer {
-			label = "（默认）"
-			defaultIndex = strconv.Itoa(i + 1)
-		}
-		fmt.Fprintf(a.errOut, "  %d. %s  %s %s\n", i+1, name, prefs.Servers[name].SSHAlias, label)
-	}
-	for {
-		value, err := a.prompt(ctx, "输入序号或服务器名（q 退出）", defaultIndex)
-		if err != nil {
-			return "", err
-		}
-		if value == "q" {
-			return "", protocol.Fail("CANCELLED", 130, "creation cancelled")
-		}
-		if _, exists := prefs.Servers[value]; exists {
-			return value, nil
-		}
-		if index, err := strconv.Atoi(value); err == nil && index > 0 && index <= len(names) {
-			return names[index-1], nil
-		}
-		fmt.Fprintln(a.errOut, "请选择列表中的服务器。")
-	}
-}
-
-func (a *app) remoteDefinitionCommand(parent *cobra.Command, kind, op string) *cobra.Command {
-	c := a.command(parent, op+" <server/project>", op+" a shared remote "+kind+" definition", cobra.ExactArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
+		return a.result(p, err)
+	}}
+	create.Flags().String("directory", "", "existing project directory")
+	create.Flags().String("server", "", "project server (default local)")
+	a.root.AddCommand(create)
+	a.command(a.root, "show <project>", "Show the project definition, client overrides and effective configuration", cobra.ExactArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
 		t, err := a.resolve(ctx, args[0], false)
 		if err != nil {
 			return nil, err
@@ -209,122 +75,416 @@ func (a *app) remoteDefinitionCommand(parent *cobra.Command, kind, op string) *c
 		if err != nil {
 			return nil, err
 		}
-		rev := expected(c)
-		if rev == 0 {
-			rev = p.Revision
+		effective, err := a.effective(t, p)
+		return map[string]any{"target": t.Name + "/" + t.Project, "definition": p, "overrides": t.Server.Projects[p.Name], "effective": effective}, err
+	})
+	edit := a.command(a.root, "edit <project>", "Edit a project using the creation wizard or explicit input", cobra.ExactArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
+		t, err := a.resolve(ctx, args[0], false)
+		if err != nil {
+			return nil, err
 		}
-		remoteArgs := []string{kind, op, t.Project, "--expected-revision", strconv.Itoa(rev)}
-		for _, name := range []string{"id", "name", "command", "directory"} {
-			if c.Flags().Changed(name) {
-				value, _ := c.Flags().GetString(name)
-				remoteArgs = append(remoteArgs, "--"+name, value)
-			}
+		p, err := a.get(ctx, t)
+		if err != nil {
+			return nil, err
 		}
-		for _, name := range []string{"local", "reverse"} {
-			if c.Flags().Lookup(name) != nil {
-				values, _ := c.Flags().GetStringArray(name)
-				for _, value := range values {
-					remoteArgs = append(remoteArgs, "--"+name, value)
-				}
-			}
+		original := p
+		if expected(c) > 0 && expected(c) != p.Revision {
+			return nil, protocol.Fail("CONFIG_CONFLICT", 4, "project configuration changed")
 		}
-		var input []byte
-		if op == "update" {
-			stdin, _ := c.Flags().GetBool("stdin")
-			if !stdin {
-				return nil, config.Invalid("--stdin is required")
+		stdin, _ := c.Flags().GetBool("stdin")
+		var override projectOverride
+		if stdin {
+			if c.Flags().Changed("directory") {
+				return nil, config.Invalid("choose --stdin or --directory")
 			}
-			var win config.Window
-			if err = a.read(&win); err != nil {
+			if expected(c) < 1 {
+				return nil, config.Invalid("--stdin requires --expected-revision from tdev show")
+			}
+			if err = a.read(&p); err != nil {
 				return nil, err
 			}
-			input, err = json.Marshal(win)
+			if p.Revision != expected(c) {
+				return nil, config.Invalid("input revision must equal expected revision")
+			}
+		} else if c.Flags().Changed("directory") {
+			dir, _ := c.Flags().GetString("directory")
+			p.Directory, err = a.remoteDirectory(ctx, t, dir)
 			if err != nil {
 				return nil, err
 			}
-			remoteArgs = append(remoteArgs, "--stdin")
+		} else {
+			if a.json || !terminalAvailable(a.in) {
+				return nil, config.Invalid("edit requires a terminal or --directory/--stdin")
+			}
+			p, override, err = a.projectWizard(ctx, t, p)
+			if err != nil {
+				return nil, err
+			}
 		}
-		return a.call(ctx, t, input, remoteArgs...)
+		if p.ID != original.ID || p.Name != original.Name {
+			return nil, config.Invalid("project identity cannot change")
+		}
+		data, err := a.writeProject(ctx, t, p, original.Revision)
+		if err != nil {
+			return nil, err
+		}
+		if override.ProjectID != "" {
+			if err = a.saveOverride(ctx, t, p, func(o *projectOverride) error { *o = override; return nil }); err != nil {
+				return nil, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "project saved; client overrides could not be saved: " + err.Error()}
+			}
+		}
+		return data, nil
 	})
-	revision(c)
-	return c
+	edit.Flags().String("directory", "", "existing project directory")
+	edit.Flags().Bool("stdin", false, "read a complete project definition")
+	revision(edit)
 }
-
-func (a *app) remoteDirectory(ctx context.Context, t target, dir string) (string, error) {
-	if dir == "" || !config.SafeText(dir) {
-		return "", config.Invalid("provide an existing remote directory")
+func (a *app) writeProject(ctx context.Context, t target, p config.Project, rev int) (json.RawMessage, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
 	}
-	if dir == "~" || strings.HasPrefix(dir, "~/") {
-		home, err := a.shell(ctx, t, `printf '%s' "$HOME"`)
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	return a.call(ctx, t, b, "project", "set", p.Name, "--stdin", "--expected-revision", strconv.Itoa(rev))
+}
+func (a *app) chooseServer(ctx context.Context, p preferences, label string) (string, error) {
+	names := append([]string{"local"}, orderedServers(p)...)
+	fmt.Fprintf(a.errOut, "\n%s：\n  1. local（本机，默认）\n", label)
+	for i, name := range names[1:] {
+		fmt.Fprintf(a.errOut, "  %d. %s\n", i+2, name)
+	}
+	for {
+		value, err := a.prompt(ctx, "输入序号或服务器名（q 退出）", "1")
 		if err != nil {
 			return "", err
 		}
-		dir = path.Join(string(home), strings.TrimPrefix(dir, "~"))
+		if value == "q" {
+			return "", protocol.Fail("CANCELLED", 130, "server selection cancelled")
+		}
+		for _, name := range names {
+			if value == name {
+				return name, nil
+			}
+		}
+		if i, e := strconv.Atoi(value); e == nil && i > 0 && i <= len(names) {
+			return names[i-1], nil
+		}
+		fmt.Fprintln(a.errOut, "请选择列表中的服务器。")
 	}
-	if !path.IsAbs(dir) {
-		return "", config.Invalid("use an absolute remote path or ~/path")
-	}
-	data, err := a.shell(ctx, t, "cd -- "+tmux.Quote(dir)+" && pwd -P")
-	if err != nil {
-		return "", fmt.Errorf("remote directory unavailable: %w", err)
-	}
-	resolved := strings.TrimSuffix(string(data), "\n")
-	if !path.IsAbs(resolved) || !config.SafeText(resolved) {
-		return "", config.Invalid("invalid remote directory response")
-	}
-	return resolved, nil
 }
-
-func (a *app) createRemoteProject(ctx context.Context, t target, dir string, interactive bool) (config.Project, error) {
-	var p config.Project
-	if err := a.handshake(ctx, t, "project-v1"); err != nil {
-		return p, err
+func (a *app) remoteDirectory(ctx context.Context, t target, dir string) (string, error) {
+	if dir == "" || !config.SafeText(dir) {
+		return "", config.Invalid("provide an existing project directory")
 	}
+	quoted := tmux.Quote(dir)
+	if dir == "~" {
+		quoted = `"$HOME"`
+	} else if strings.HasPrefix(dir, "~/") {
+		quoted = `"$HOME"/` + tmux.Quote(dir[2:])
+	} else if !strings.HasPrefix(dir, "/") {
+		return "", config.Invalid("use an absolute path or ~/path")
+	}
+	data, err := a.shell(ctx, t, "cd -- "+quoted+" && pwd -P")
+	if err != nil {
+		return "", fmt.Errorf("project directory unavailable: %w", err)
+	}
+	path := strings.TrimSuffix(string(data), "\n")
+	if !strings.HasPrefix(path, "/") || !config.SafeText(path) {
+		return "", config.Invalid("invalid project directory response")
+	}
+	return path, nil
+}
+func (a *app) createRemoteProject(ctx context.Context, t target, dir string, interactive bool) (config.Project, error) {
+	p := config.Project{SchemaVersion: 1, Revision: 1, ID: config.NewID(), Name: t.Project, Directory: dir, Windows: []config.Window{{ID: "main", Name: "main", Directory: "."}}, Forwards: []config.Forward{}}
+	var override projectOverride
+	var err error
 	if interactive {
-		fmt.Fprintf(a.errOut, "\n添加远端项目 · %s\n", t.Name)
-		for !config.ValidName(t.Project) {
-			name, err := a.prompt(ctx, "项目名称（字母、数字、-、_）", "")
+		fmt.Fprintf(a.errOut, "\n添加项目 · %s\n", t.Name)
+		for !config.ValidName(p.Name) {
+			p.Name, err = a.prompt(ctx, "项目名称（字母、数字、-、_）", "")
 			if err != nil {
 				return p, err
 			}
-			t.Project = name
-			if !config.ValidName(name) {
+			if !config.ValidName(p.Name) {
 				fmt.Fprintln(a.errOut, "请输入有效的项目名称。")
 			}
 		}
+		t.Project = p.Name
+		t.Server.Projects = nil
+		p, override, err = a.projectWizard(ctx, t, p)
+		if err != nil {
+			return p, err
+		}
+	} else {
+		p.Directory, err = a.remoteDirectory(ctx, t, dir)
+		if err != nil {
+			return p, err
+		}
+	}
+	if err = p.Validate(); err != nil {
+		return p, err
+	}
+	b, _ := json.Marshal(p)
+	data, err := a.call(ctx, t, b, "project", "create", p.Name, "--stdin")
+	if err != nil {
+		return p, err
+	}
+	if err = json.Unmarshal(data, &p); err != nil {
+		return p, err
+	}
+	if override.ProjectID != "" {
+		if err = a.saveOverride(ctx, t, p, func(o *projectOverride) error { *o = override; return nil }); err != nil {
+			return p, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "project created; client overrides could not be saved: " + err.Error()}
+		}
+	}
+	if interactive {
+		fmt.Fprintf(a.errOut, "✓ 已创建项目 %s/%s\n  %s\n", t.Name, p.Name, p.Directory)
+	}
+	return p, nil
+}
+
+// The same draft editor is used for create, open-on-missing and edit. No write
+// occurs until all fields and the final confirmation have been accepted.
+func (a *app) projectWizard(ctx context.Context, t target, p config.Project) (config.Project, projectOverride, error) {
+	override := cloneOverride(t.Server.Projects[p.Name])
+	if override.ProjectID != "" && override.ProjectID != p.ID {
+		return p, override, config.Invalid("project identity changed; reset client overrides first")
 	}
 	for {
-		if interactive && dir == "" {
-			value, err := a.promptWithCompletion(ctx, "远端已有项目目录（绝对路径或 ~/路径，Tab 补全）", "", func(ctx context.Context, prefix string) ([]string, error) {
-				return a.completeRemoteDirectories(ctx, t, prefix)
-			})
-			if err != nil {
-				return p, err
-			}
-			dir = value
-		}
-		resolved, err := a.remoteDirectory(ctx, t, dir)
+		dir, err := a.promptWithCompletion(ctx, "项目目录（绝对路径或 ~/路径，Tab 补全）", p.Directory, func(ctx context.Context, prefix string) ([]string, error) {
+			return a.completeRemoteDirectories(ctx, t, prefix)
+		})
 		if err != nil {
-			if !interactive {
-				return p, err
+			return p, override, err
+		}
+		p.Directory, err = a.remoteDirectory(ctx, t, dir)
+		if err == nil {
+			break
+		}
+		fmt.Fprintln(a.errOut, err)
+	}
+	editWindows, err := a.wizardYes(ctx, "配置启动窗口？", false)
+	if err != nil {
+		return p, override, err
+	}
+	if editWindows {
+		windows := []config.Window{}
+		for _, w := range p.Windows {
+			keep, err := a.wizardYes(ctx, "保留窗口 "+w.Name+"？", true)
+			if err != nil {
+				return p, override, err
 			}
+			if !keep {
+				continue
+			}
+			w, err = a.windowWizard(ctx, w)
+			if err != nil {
+				return p, override, err
+			}
+			windows = append(windows, w)
+		}
+		for {
+			add, err := a.wizardYes(ctx, "添加启动窗口？", len(windows) == 0)
+			if err != nil {
+				return p, override, err
+			}
+			if !add {
+				if len(windows) == 0 {
+					fmt.Fprintln(a.errOut, "至少需要一个窗口。")
+					continue
+				}
+				break
+			}
+			w, err := a.windowWizard(ctx, config.Window{ID: "w" + config.NewID(), Name: "shell", Directory: "."})
+			if err != nil {
+				return p, override, err
+			}
+			windows = append(windows, w)
+		}
+		p.Windows = windows
+	}
+	if len(p.Forwards) > 0 {
+		edit, err := a.wizardYes(ctx, "配置已有端口映射？", false)
+		if err != nil {
+			return p, override, err
+		}
+		if edit {
+			forwards := []config.Forward{}
+			for _, f := range p.Forwards {
+				keep, err := a.wizardYes(ctx, "保留映射 "+f.Spec()+"？", true)
+				if err != nil {
+					return p, override, err
+				}
+				if !keep {
+					delete(override.Forwards, f.ID)
+					continue
+				}
+				f, override, err = a.forwardWizard(ctx, t, p.ID, f, override)
+				if err != nil {
+					return p, override, err
+				}
+				forwards = append(forwards, f)
+			}
+			p.Forwards = forwards
+		}
+	}
+	for {
+		add, err := a.wizardYes(ctx, "添加端口映射？", false)
+		if err != nil {
+			return p, override, err
+		}
+		if !add {
+			break
+		}
+		f, o, err := a.forwardWizard(ctx, t, p.ID, config.Forward{}, override)
+		if err != nil {
+			return p, override, err
+		}
+		check := p
+		check.Forwards = append(append([]config.Forward{}, p.Forwards...), f)
+		if _, err = a.effectiveWithOverride(check, o); err != nil {
 			fmt.Fprintln(a.errOut, err)
-			dir = ""
 			continue
 		}
-		data, err := a.call(ctx, t, nil, "project", "create", t.Project, "--directory", resolved)
-		if err != nil {
-			return p, err
-		}
-		if err = json.Unmarshal(data, &p); err != nil {
-			return p, err
-		}
-		if err = p.Validate(); err != nil {
-			return p, err
-		}
-		if interactive {
-			fmt.Fprintf(a.errOut, "✓ 已创建项目 %s/%s\n  %s\n已添加 shell 窗口。\n", t.Name, p.Name, p.Directory)
-		}
-		return p, nil
+		p = check
+		override = o
 	}
+	effective, err := a.effectiveWithOverride(p, override)
+	if err != nil {
+		return p, override, err
+	}
+	fmt.Fprintf(a.errOut, "\n项目：%s/%s\n目录：%s\n", t.Name, p.Name, p.Directory)
+	for _, w := range p.Windows {
+		fmt.Fprintf(a.errOut, "窗口：%s  %s\n", w.Name, w.Command)
+	}
+	for _, f := range effective.Forwards {
+		fmt.Fprintf(a.errOut, "映射：-%s %s\n", f.Direction, f.Spec())
+	}
+	yes, err := a.wizardYes(ctx, "保存项目配置？", true)
+	if err != nil {
+		return p, override, err
+	}
+	if !yes {
+		return p, override, protocol.Fail("CANCELLED", 130, "project changes cancelled")
+	}
+	return p, override, nil
+}
+func (a *app) effectiveWithOverride(p config.Project, o projectOverride) (config.Project, error) {
+	if err := p.Validate(); err != nil {
+		return p, err
+	}
+	return mergeProject(p, o)
+}
+func (a *app) windowWizard(ctx context.Context, w config.Window) (config.Window, error) {
+	var err error
+	w.Name, err = a.prompt(ctx, "窗口名称", w.Name)
+	if err != nil {
+		return w, err
+	}
+	w.Directory, err = a.prompt(ctx, "窗口目录（相对项目根目录）", w.Directory)
+	if err != nil {
+		return w, err
+	}
+	w.Command, err = a.prompt(ctx, "启动命令（- 清空，空命令进入 shell）", w.Command)
+	if w.Command == "-" {
+		w.Command = ""
+	}
+	return w, err
+}
+func (a *app) forwardWizard(ctx context.Context, t target, projectID string, f config.Forward, o projectOverride) (config.Forward, projectOverride, error) {
+	o = cloneOverride(o)
+	if o.ProjectID != "" && o.ProjectID != projectID {
+		return f, o, config.Invalid("project identity changed; reset client overrides first")
+	}
+	if f.ID == "" {
+		f.ID = "f" + config.NewID()
+	}
+	if f.Direction == "" {
+		f.Direction = "L"
+	}
+	for {
+		value, err := a.prompt(ctx, "方向（L 本机到远端 / R 远端到本机）", f.Direction)
+		if err != nil {
+			return f, o, err
+		}
+		value = strings.ToUpper(value)
+		if value == "L" || value == "R" {
+			f.Direction = value
+			break
+		}
+		fmt.Fprintln(a.errOut, "请输入 L 或 R。")
+	}
+	fallback := ""
+	if f.TargetHost != "" {
+		fallback = net.JoinHostPort(f.TargetHost, strconv.Itoa(f.TargetPort))
+	}
+	for {
+		value, err := a.prompt(ctx, "服务地址（host:port）", fallback)
+		if err != nil {
+			return f, o, err
+		}
+		host, port, err := net.SplitHostPort(value)
+		if err == nil {
+			n, e := strconv.Atoi(port)
+			check := config.Forward{Direction: f.Direction, BindAddress: "localhost", ListenPort: n, TargetHost: host, TargetPort: n}
+			if e == nil && check.Validate() == nil {
+				f.TargetHost, f.TargetPort = host, n
+				break
+			}
+		}
+		fmt.Fprintln(a.errOut, "请输入完整服务地址，例如 localhost:8000 或 [::1]:8000。")
+	}
+	if f.BindAddress == "" {
+		f.BindAddress = "localhost"
+	}
+	if f.ListenPort == 0 {
+		f.ListenPort = f.TargetPort
+	}
+	port := f.ListenPort
+	if patch := o.Forwards[f.ID]; patch.ListenPort != nil {
+		port = *patch.ListenPort
+	}
+	for {
+		label := "本机监听端口"
+		if f.Direction == "R" {
+			label = "远端监听端口"
+		}
+		value, err := a.prompt(ctx, label, strconv.Itoa(port))
+		if err != nil {
+			return f, o, err
+		}
+		n, err := strconv.Atoi(value)
+		if err == nil && n > 0 && n <= 65535 {
+			port = n
+			break
+		}
+		fmt.Fprintln(a.errOut, "端口需要在 1–65535 之间。")
+	}
+	if f.Direction == "L" && !t.Local {
+		if port != f.ListenPort {
+			if o.Forwards == nil {
+				o.Forwards = map[string]forwardOverride{}
+			}
+			patch := o.Forwards[f.ID]
+			patch.ListenPort = &port
+			o.Forwards[f.ID] = patch
+			o.ProjectID = projectID
+		} else if patch, ok := o.Forwards[f.ID]; ok {
+			patch.ListenPort = nil
+			o.Forwards[f.ID] = patch
+		}
+	} else {
+		f.ListenPort = port
+		delete(o.Forwards, f.ID)
+	}
+	return f, o, f.Validate()
+}
+
+func cloneOverride(o projectOverride) projectOverride {
+	data, _ := json.Marshal(o)
+	var copy projectOverride
+	_ = json.Unmarshal(data, &copy)
+	return copy
 }

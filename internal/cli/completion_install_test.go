@@ -17,7 +17,7 @@ func TestCompletionInstallationPreservesShellFiles(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("build and startup validation runs in Linux fixture")
 	}
-	binary := buildCLI(t, "0.0.3-dev")
+	binary := buildCLI(t, "0.1.0-dev")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("ZDOTDIR", home)

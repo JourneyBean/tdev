@@ -20,12 +20,27 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 	if !terminalAvailable(a.in) {
 		return config.Invalid("attach requires a terminal")
 	}
+	if t.Local {
+		p := config.Project{Name: t.Project}
+		var err error
+		if !t.Scratch {
+			p, err = a.store.Get(t.Project)
+		}
+		if err != nil {
+			return err
+		}
+		return a.manager().Attach(ctx, p, original.SessionID, original.Generation, window, "a"+config.NewID(), a.in, a.out, a.errOut)
+	}
 	terminal := a.in.(*os.File)
 	state, err := term.GetState(int(terminal.Fd()))
 	if err != nil {
 		return err
 	}
 	defer term.Restore(int(terminal.Fd()), state)
+	sessionGroup := "session"
+	if t.Scratch {
+		sessionGroup = "scratch"
+	}
 	failed := false
 	for {
 		if failed {
@@ -38,7 +53,7 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		data, e := a.call(ctx, t, nil, "session", "status", t.Project)
+		data, e := a.call(ctx, t, nil, sessionGroup, "status", t.Project)
 		if e != nil {
 			if reconnect.Retryable(e) {
 				failed = true
@@ -51,7 +66,7 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 			return e
 		}
 		if current.Status != "running" || current.Generation == "" || current.Generation != original.Generation || current.SessionID != original.SessionID {
-			return protocol.Fail("SESSION_NOT_FOUND", 5, "original project session ended; reconnect will not recreate it or enter a replacement")
+			return protocol.Fail("SESSION_NOT_FOUND", 5, "original session ended; reconnect will not recreate it or enter a replacement")
 		}
 		m, e := sshx.Start(ctx, t.Server.SSHAlias, t.SSH, t.Batch)
 		if e != nil {
@@ -62,7 +77,7 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 			return e
 		}
 		token := "a" + config.NewID()
-		command := remoteCommand(t, "local", "session", "attach", t.Project, "--session-id", current.SessionID, "--generation", current.Generation, "--token", token)
+		command := remoteCommand(t, "api", sessionGroup, "attach", t.Project, "--session-id", current.SessionID, "--generation", current.Generation, "--token", token)
 		if window != "" {
 			command += " --window " + tmux.Quote(window)
 		}
@@ -84,7 +99,7 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 			batch := t
 			batch.Batch = true
 			for {
-				b, err := a.call(readyCtx, batch, nil, "session", "attachment", t.Project, "--token", token)
+				b, err := a.call(readyCtx, batch, nil, sessionGroup, "attachment", t.Project, "--token", token)
 				if err == nil {
 					var attachment tmux.Attachment
 					if json.Unmarshal(b, &attachment) == nil && attachment.Attached {
@@ -121,7 +136,7 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 		}
 		exit, ok := e.(*exec.ExitError)
 		if ok && exit.ExitCode() == 5 {
-			return protocol.Fail("SESSION_NOT_FOUND", 5, "original project session ended before attachment")
+			return protocol.Fail("SESSION_NOT_FOUND", 5, "original session ended before attachment")
 		}
 		if !ok || exit.ExitCode() != 255 {
 			return e

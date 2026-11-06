@@ -62,7 +62,7 @@ func (a *app) bundle(ctx context.Context, c *cobra.Command, goos, arch string, r
 	}
 	return update.Load(ctx, dir, source, key, version, goos, arch)
 }
-func (a *app) localUpdate(local *cobra.Command) {
+func (a *app) apiUpdate(local *cobra.Command) {
 	g := group(local, "binary", "Inspect/install/rollback a verified local binary")
 	a.command(g, "platform", "Report runtime platform without requiring tmux", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
 		return map[string]string{"os": runtime.GOOS, "arch": runtime.GOARCH}, nil
@@ -97,13 +97,16 @@ func (a *app) localUpdate(local *cobra.Command) {
 		return update.Rollback(ctx, a.store, d)
 	})
 	rollback.Flags().String("destination", "", "managed destination")
-	a.localMountProbe(local)
+	a.apiMountProbe(local)
 }
 func (a *app) updateCommands() {
 	for _, op := range []string{"install", "upgrade"} {
 		op := op
 		c := &cobra.Command{Use: op, Short: op + " a signed local or remote binary without restarting sessions", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
 			remote, _ := c.Flags().GetString("remote")
+			if remote == "local" {
+				remote = ""
+			}
 			completionMode := "none"
 			if op == "install" {
 				completionMode, _ = c.Flags().GetString("completion")
@@ -189,29 +192,48 @@ func (a *app) updateCommands() {
 		}
 	}
 }
-func (a *app) shell(ctx context.Context, t target, command string) ([]byte, error) {
+func (a *app) shell(ctx context.Context, t target, command string) (data []byte, resultErr error) {
+	started := time.Now()
+	var exitCode *int
+	defer func() { _, _ = a.recordDiagnostic("shell", t.Name, started, resultErr, exitCode) }()
 	ctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 	cmd := sshx.Command(ctx, "ssh", append(t.SSH.Args(t.Batch), "-T", t.Server.SSHAlias, command)...)
+	if t.Local {
+		cmd = sshx.Command(ctx, "sh", "-c", command)
+	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
+	if cmd.ProcessState != nil {
+		code := cmd.ProcessState.ExitCode()
+		exitCode = &code
+	}
+	if ctx.Err() != nil {
+		return nil, sshx.Error(ctx.Err(), stderr.String())
+	}
 	if e, ok := err.(*exec.ExitError); ok && e.ExitCode() == 7 {
 		return nil, protocol.Fail("DEPENDENCY_MISSING", 7, "remote bootstrap dependency missing: %s", stderr.String())
 	}
 	return out, sshx.Error(err, stderr.String())
 }
 func (a *app) installRemote(ctx context.Context, t target, c *cobra.Command) (any, error) {
-	platform, err := a.shell(ctx, t, "uname -s; uname -m; command -v tmux >/dev/null || { printf 'tmux is required; install it before setup\\n' >&2; exit 7; }")
+	marker := "TDEV_INSTALL_" + strings.ReplaceAll(config.NewID(), "-", "")
+	receiptPath := tmux.Quote(update.ReceiptPath(t.Server.RemoteBinary))
+	script := "uname -s; uname -m; command -v tmux >/dev/null || { printf 'tmux is required; install it before setup\\n' >&2; exit 7; }; printf '\\n" + marker + "\\n'; if test -f " + receiptPath + "; then cat -- " + receiptPath + "; fi"
+	platform, err := a.shell(ctx, t, script)
 	if err != nil {
 		return nil, err
 	}
-	fields := strings.Fields(string(platform))
+	metadataParts := bytes.SplitN(platform, []byte("\n"+marker+"\n"), 2)
+	if len(metadataParts) != 2 {
+		return nil, config.Invalid("invalid remote platform/receipt response")
+	}
+	fields := strings.Fields(string(metadataParts[0]))
 	if len(fields) != 2 {
 		return nil, config.Invalid("invalid remote platform response")
 	}
-	goos := strings.ToLower(fields[0])
-	arch := fields[1]
+	goos, arch := strings.ToLower(fields[0]), fields[1]
 	switch arch {
 	case "x86_64":
 		arch = "amd64"
@@ -219,11 +241,12 @@ func (a *app) installRemote(ctx context.Context, t target, c *cobra.Command) (an
 		arch = "arm64"
 	}
 	var receipt *update.Receipt
-	if data, err := a.call(ctx, t, nil, "binary", "receipt", "--destination", t.Server.RemoteBinary); err == nil {
+	if len(bytes.TrimSpace(metadataParts[1])) > 0 {
 		var r update.Receipt
-		if json.Unmarshal(data, &r) == nil {
-			receipt = &r
+		if err = json.Unmarshal(metadataParts[1], &r); err != nil {
+			return nil, config.Invalid("invalid remote installation receipt: %v", err)
 		}
+		receipt = &r
 	}
 	b, err := a.bundle(ctx, c, goos, arch, receipt)
 	if err != nil {

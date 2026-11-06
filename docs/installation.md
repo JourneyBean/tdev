@@ -36,19 +36,21 @@ curl -fL https://github.com/JourneyBean/tdev/releases/latest/download/install.sh
 sh install.sh
 ```
 
-## v0.0.3 二进制
+## 按版本下载二进制
+
+发布产物见 [GitHub Releases](https://github.com/JourneyBean/tdev/releases)。每个版本包含以下平台，压缩包内的程序名为 tdev：
 
 | 平台 | 压缩包 | 独立二进制 |
-|---|---|---|
-| macOS · Apple Silicon | [darwin-arm64.tar.gz](https://github.com/JourneyBean/tdev/releases/download/v0.0.3/tdev-darwin-arm64.tar.gz) | [darwin-arm64](https://github.com/JourneyBean/tdev/releases/download/v0.0.3/tdev-darwin-arm64) |
-| macOS · Intel | [darwin-amd64.tar.gz](https://github.com/JourneyBean/tdev/releases/download/v0.0.3/tdev-darwin-amd64.tar.gz) | [darwin-amd64](https://github.com/JourneyBean/tdev/releases/download/v0.0.3/tdev-darwin-amd64) |
-| Linux · x86_64 | [linux-amd64.tar.gz](https://github.com/JourneyBean/tdev/releases/download/v0.0.3/tdev-linux-amd64.tar.gz) | [linux-amd64](https://github.com/JourneyBean/tdev/releases/download/v0.0.3/tdev-linux-amd64) |
-| Linux · ARM64 | [linux-arm64.tar.gz](https://github.com/JourneyBean/tdev/releases/download/v0.0.3/tdev-linux-arm64.tar.gz) | [linux-arm64](https://github.com/JourneyBean/tdev/releases/download/v0.0.3/tdev-linux-arm64) |
+| --- | --- | --- |
+| macOS · Apple Silicon | tdev-darwin-arm64.tar.gz | tdev-darwin-arm64 |
+| macOS · Intel | tdev-darwin-amd64.tar.gz | tdev-darwin-amd64 |
+| Linux · x86_64 | tdev-linux-amd64.tar.gz | tdev-linux-amd64 |
+| Linux · ARM64 | tdev-linux-arm64.tar.gz | tdev-linux-arm64 |
 
 手动安装示例（Linux x86_64）：
 
 ```sh
-curl -fLO https://github.com/JourneyBean/tdev/releases/download/v0.0.3/tdev-linux-amd64.tar.gz
+curl -fLO https://github.com/JourneyBean/tdev/releases/latest/download/tdev-linux-amd64.tar.gz
 tar -xzf tdev-linux-amd64.tar.gz
 mkdir -p "$HOME/.local/bin"
 install -m 755 tdev "$HOME/.local/bin/tdev"
@@ -98,3 +100,15 @@ tdev upgrade --rollback
 ```
 
 升级复用安装时保存的发布公钥和下载源，验证签名后替换二进制，保留旧版本备份。远端需要 Linux、SSH 和 tmux；文件挂载另需 SSHFS，macOS 需 macFUSE。
+
+## v0.2.0 客户端与服务端
+
+GitLab 的签名构建、Release 发布及专属安装地址见 [GitLab CI 发布](gitlab-release.md)。GitLab 生成的安装脚本内置当前项目的版本下载目录，后续 upgrade 使用该项目的 latest Release；在线下载需要匿名可读的 HTTPS 项目与包。
+
+v0.2.0 增加本机诊断日志和 --debug，修复 zsh 登录 shell 下的目录补全。补全修复由客户端生成命令实现，更新客户端即可生效。机器协议、配置 schema 与 capability 要求沿用 v0.1.0，连接时继续按能力检查。
+
+## v0.1.0 客户端与服务端
+
+v0.1.0 使用 tdev api 机器接口。连接旧版服务端时，客户端显示版本并提示升级；已登记服务器使用 `tdev upgrade --remote dev`。远端通过上传已验证候选二进制完成升级，原 API 无需先支持新协议。
+
+本机项目可直接创建，无需 setup。旧版自动生成名称的 tmux session 按项目 UUID 识别并复用；新 session 优先使用项目名称，同名普通会话存在时使用独立的 tdev-<UUID> 名称并提示 warning。

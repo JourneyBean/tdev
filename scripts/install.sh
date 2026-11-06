@@ -5,6 +5,8 @@ umask 077
 release_version='@TDEV_VERSION@'
 embedded_public_key='@TDEV_PUBLIC_KEY@'
 trusted_checksums='@TDEV_CHECKSUMS@'
+embedded_release_url='@TDEV_RELEASE_URL@'
+embedded_upgrade_url='@TDEV_UPGRADE_URL@'
 release_dir= release_url= public_key= version= shell=auto
 destination="${HOME}/.local/bin/tdev"
 config_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/tdev"
@@ -44,9 +46,13 @@ if [ -z "$version" ] && [ "$packaged" = yes ]; then version=$release_version; fi
 if [ -n "$release_dir" ]; then
   [ -z "$release_url" ] || { usage >&2; exit 2; }
 elif [ -z "$release_url" ]; then
-  [ "$packaged" = yes ] || { printf '%s\n' 'Use the installer attached to a GitHub Release, or provide --release-dir/--release-url and --public-key.' >&2; exit 2; }
+  [ "$packaged" = yes ] || { printf '%s\n' 'Use the installer attached to a Release, or provide --release-dir/--release-url and --public-key.' >&2; exit 2; }
   case "$version" in *[!0-9A-Za-z.-]*|'') printf '%s\n' 'Invalid version.' >&2; exit 2 ;; esac
-  release_url="https://github.com/JourneyBean/tdev/releases/download/v${version#v}"
+  if [ -n "$embedded_release_url" ]; then
+    release_url=$embedded_release_url
+  else
+    release_url="https://github.com/JourneyBean/tdev/releases/download/v${version#v}"
+  fi
   default_source=yes
 fi
 if [ -n "$release_url" ]; then
@@ -106,9 +112,11 @@ fetch manifest.sig
 if [ "$public_key" != "$stage/release.pub" ]; then cat "$public_key" > "$stage/release.pub"; fi
 chmod 700 "$stage/$asset"
 remember_url=$release_url
-if [ "$default_source" = yes ]; then remember_url=https://github.com/JourneyBean/tdev/releases/latest/download; fi
+if [ "$default_source" = yes ]; then
+  remember_url=${embedded_upgrade_url:-https://github.com/JourneyBean/tdev/releases/latest/download}
+fi
 # Only authenticated bytes execute; the candidate verifies the signed manifest again.
-"$stage/$asset" --config-dir "$config_dir" --json local binary install --release-dir "$stage" --public-key "$stage/release.pub" --version "$version" --destination "$destination" --source-url "$remember_url"
+"$stage/$asset" --config-dir "$config_dir" --json api binary install --release-dir "$stage" --public-key "$stage/release.pub" --version "$version" --destination "$destination" --source-url "$remember_url"
 printf '\nInstalled %s.\n' "$destination"
 if [ "$modify_path" = auto ]; then
   if [ "$custom_destination" = no ]; then modify_path=yes; else modify_path=no; fi

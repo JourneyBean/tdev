@@ -44,12 +44,12 @@ func (m Manager) Attachment(ctx context.Context, p config.Project, token string)
 	if err = json.Unmarshal(b, &a); err != nil {
 		return a, err
 	}
-	s, err := m.Require(ctx, p)
+	s, err := m.attachmentSession(ctx, p)
 	if err != nil {
 		return a, err
 	}
 	if a.SessionID != s.SessionID || a.Generation != s.Generation {
-		return a, protocol.Fail("SESSION_NOT_FOUND", 5, "original project session ended")
+		return a, protocol.Fail("SESSION_NOT_FOUND", 5, "original session ended")
 	}
 	clients, err := m.run(ctx, "list-clients", "-t", s.SessionID, "-F", "#{client_pid}")
 	if err != nil {
@@ -63,18 +63,22 @@ func (m Manager) Attachment(ctx context.Context, p config.Project, token string)
 	return a, nil
 }
 func (m Manager) Attach(ctx context.Context, p config.Project, session, generation, window, token string, in io.Reader, out, stderr io.Writer) error {
-	s, err := m.Require(ctx, p)
+	s, err := m.attachmentSession(ctx, p)
 	if err != nil {
 		return err
 	}
 	if s.SessionID != session || s.Generation != generation {
-		return protocol.Fail("SESSION_NOT_FOUND", 5, "original project session ended; refusing to attach a replacement")
+		return protocol.Fail("SESSION_NOT_FOUND", 5, "original session ended; refusing to attach a replacement")
 	}
 	path, err := m.attachmentPath(token)
 	if err != nil {
 		return err
 	}
 	args := []string{"attach-session", "-t", s.SessionID}
+	if p.ID == "" && os.Getenv("TMUX") != "" {
+		_, err = m.run(ctx, "switch-client", "-t", s.SessionID)
+		return err
+	}
 	if window != "" {
 		if !strings.HasPrefix(window, "@") {
 			return config.Invalid("invalid window ID")

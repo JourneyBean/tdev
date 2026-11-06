@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"tdev/internal/config"
 	"tdev/internal/sshx"
+	"tdev/internal/tmux"
 )
 
 const completionTimeout = 1500 * time.Millisecond
@@ -38,8 +39,8 @@ func (a *app) completionCommands() {
 	}
 	var register func(*cobra.Command, bool)
 	register = func(c *cobra.Command, local bool) {
-		local = local || c.Name() == "local"
-		if strings.Contains(c.Use, "<project>") || strings.Contains(c.Use, "[project]") || strings.Contains(c.Use, "<server/project>") || strings.HasPrefix(c.Use, "create [server/") {
+		local = local || c.Name() == "api"
+		if (c.Name() == "open" && !local) || strings.Contains(c.Use, "<project>") || strings.Contains(c.Use, "[project]") || strings.Contains(c.Use, "<server/project>") || strings.HasPrefix(c.Use, "create [server/") {
 			c.ValidArgsFunction = func(c *cobra.Command, args []string, prefix string) ([]string, cobra.ShellCompDirective) {
 				if len(args) == 0 {
 					if c.Name() == "create" && !local {
@@ -54,6 +55,14 @@ func (a *app) completionCommands() {
 					return nil, cobra.ShellCompDirectiveFilterDirs
 				}
 				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+		}
+		if c.Name() == "scratch" && !local {
+			c.ValidArgsFunction = func(c *cobra.Command, args []string, prefix string) ([]string, cobra.ShellCompDirective) {
+				if len(args) > 0 {
+					return nil, cobra.ShellCompDirectiveNoFileComp
+				}
+				return a.completeServers(prefix, false)
 			}
 		}
 		for _, flag := range []string{"server", "remote"} {
@@ -106,10 +115,10 @@ func (a *app) completionCommands() {
 			})
 		}
 		if c.Flags().Lookup("forward") != nil {
-			_ = c.RegisterFlagCompletionFunc("forward", a.completeDefinitionIDs("forward", local))
+			_ = c.RegisterFlagCompletionFunc("forward", a.completeForwardIDs())
 		}
-		if c.Flags().Lookup("id") != nil && (c.Parent().Name() == "window" || c.Parent().Name() == "forward") && c.Name() != "add" {
-			_ = c.RegisterFlagCompletionFunc("id", a.completeDefinitionIDs(c.Parent().Name(), local))
+		if c.Flags().Lookup("id") != nil && c.Parent().Name() == "forward" && c.Name() != "add" {
+			_ = c.RegisterFlagCompletionFunc("id", a.completeForwardIDs())
 		}
 		for _, child := range c.Commands() {
 			register(child, local)
@@ -163,7 +172,7 @@ func (a *app) completeServers(prefix string, namespace bool) ([]string, cobra.Sh
 		return nil, directive
 	}
 	var names []string
-	for name := range prefs.Servers {
+	for _, name := range append([]string{"local"}, orderedServers(prefs)...) {
 		if namespace {
 			name += "/"
 		}
@@ -175,81 +184,125 @@ func (a *app) completeServers(prefix string, namespace bool) ([]string, cobra.Sh
 	return names, directive
 }
 
-func (a *app) completeProjects(c *cobra.Command, prefix string, local bool) ([]string, cobra.ShellCompDirective) {
-	var projects []config.Project
+func (a *app) completeProjects(c *cobra.Command, prefix string, api bool) ([]string, cobra.ShellCompDirective) {
+	directive := cobra.ShellCompDirectiveNoFileComp
+	if api {
+		projects, _ := a.store.List()
+		var names []string
+		for _, p := range projects {
+			if strings.HasPrefix(p.Name, prefix) {
+				names = append(names, p.Name)
+			}
+		}
+		return names, directive
+	}
+	prefs, err := a.prefs()
+	if err != nil {
+		return nil, directive
+	}
+	servers := append([]string{"local"}, orderedServers(prefs)...)
 	namespace := ""
-	if local {
-		projects, _ = a.store.List()
-	} else {
-		prefs, err := a.prefs()
-		if err != nil {
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		}
-		name := prefs.DefaultServer
-		if strings.Contains(prefix, "/") {
-			parts := strings.SplitN(prefix, "/", 2)
-			name, namespace = parts[0], parts[0]+"/"
-		}
+	if strings.Contains(prefix, "/") {
+		parts := strings.SplitN(prefix, "/", 2)
+		servers = []string{parts[0]}
+		namespace = parts[0] + "/"
+	}
+	ctx, cancel := context.WithTimeout(c.Context(), completionTimeout)
+	defer cancel()
+	type result struct {
+		name      string
+		projects  []config.Project
+		scratches []tmux.Scratch
+	}
+	results := make(chan result, len(servers))
+	for _, name := range servers {
 		t, err := a.serverTarget(prefs, name, "")
 		if err != nil {
-			return nil, cobra.ShellCompDirectiveNoFileComp
+			continue
 		}
-		t.Batch = true
-		ctx, cancel := context.WithTimeout(c.Context(), completionTimeout)
-		defer cancel()
-		data, err := a.call(ctx, t, nil, "project", "list")
-		if err != nil || json.Unmarshal(data, &projects) != nil {
-			return nil, cobra.ShellCompDirectiveNoFileComp
+		go func(t target) {
+			t.Batch = true
+			data, err := a.call(ctx, t, nil, "project", "list")
+			var projects []config.Project
+			if err == nil {
+				_ = json.Unmarshal(data, &projects)
+			}
+			var scratches []tmux.Scratch
+			if c.Name() == "open" {
+				if b, e := a.call(ctx, t, nil, "scratch", "list"); e == nil {
+					_ = json.Unmarshal(b, &scratches)
+				}
+			}
+			results <- result{name: t.Name, projects: projects, scratches: scratches}
+		}(t)
+	}
+	seen := map[string]bool{}
+	for range servers {
+		select {
+		case res := <-results:
+			for _, p := range res.projects {
+				if p.Validate() != nil {
+					continue
+				}
+				values := []string{res.name + "/" + p.Name}
+				if namespace == "" {
+					values = append(values, p.Name)
+				}
+				for _, value := range values {
+					if strings.HasPrefix(value, prefix) {
+						seen[value] = true
+					}
+				}
+			}
+			for _, scratch := range res.scratches {
+				if !config.ValidName(scratch.Name) {
+					continue
+				}
+				values := []string{res.name + "/" + scratch.Name}
+				if namespace == "" {
+					values = append(values, scratch.Name)
+				}
+				for _, value := range values {
+					if strings.HasPrefix(value, prefix) {
+						seen[value] = true
+					}
+				}
+			}
+		case <-ctx.Done():
 		}
 	}
-	var names []string
-	for _, project := range projects {
-		if project.Validate() == nil && strings.HasPrefix(namespace+project.Name, prefix) {
-			names = append(names, namespace+project.Name)
-		}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
 	}
 	sort.Strings(names)
-	return names, cobra.ShellCompDirectiveNoFileComp
+	return names, directive
 }
 
-func (a *app) completeDefinitionIDs(kind string, local bool) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+func (a *app) completeForwardIDs() func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
 	return func(c *cobra.Command, args []string, prefix string) ([]string, cobra.ShellCompDirective) {
 		if len(args) == 0 {
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
+		ctx, cancel := context.WithTimeout(c.Context(), completionTimeout)
+		defer cancel()
+		t, err := a.resolve(ctx, args[0], false)
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		t.Batch = true
+		data, err := a.call(ctx, t, nil, "project", "get", t.Project)
 		var project config.Project
-		var err error
-		if local {
-			project, err = a.store.Get(args[0])
-		} else {
-			ctx, cancel := context.WithTimeout(c.Context(), completionTimeout)
-			defer cancel()
-			var t target
-			t, err = a.resolve(ctx, args[0], false)
-			if err == nil {
-				t.Batch = true
-				var data json.RawMessage
-				data, err = a.call(ctx, t, nil, "config", "get", t.Project)
-				if err == nil {
-					err = json.Unmarshal(data, &project)
-				}
-			}
+		if err == nil {
+			err = json.Unmarshal(data, &project)
 		}
 		if err != nil || project.Validate() != nil {
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
 		var ids []string
-		if kind == "window" {
-			for _, window := range project.Windows {
-				if strings.HasPrefix(window.ID, prefix) {
-					ids = append(ids, window.ID)
-				}
-			}
-		} else {
-			for _, forward := range project.Forwards {
-				if strings.HasPrefix(forward.ID, prefix) {
-					ids = append(ids, forward.ID)
-				}
+		for _, forward := range project.Forwards {
+			if strings.HasPrefix(forward.ID, prefix) {
+				ids = append(ids, forward.ID)
 			}
 		}
 		sort.Strings(ids)

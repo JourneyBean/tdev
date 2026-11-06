@@ -1,5 +1,5 @@
 GO ?= go
-VERSION ?= 0.0.3
+VERSION ?= 0.2.0
 LDFLAGS = -X tdev/internal/cli.Version=$(VERSION)
 
 .PHONY: build test check cross release
@@ -14,6 +14,7 @@ check:
 	test -z "$$(gofmt -l cmd internal)"
 	git diff --check
 	sh -n scripts/install.sh
+	sh -n scripts/gitlab-build.sh
 
 cross:
 	@mkdir -p dist

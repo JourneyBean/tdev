@@ -30,12 +30,63 @@ func freeLocalPort(t *testing.T) int {
 	return port
 }
 
+func TestSetupWizardSharedLocalAndRemoteConfig(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("private sshd integration runs on Linux")
+	}
+	s := testssh.Start(t)
+	binary := buildCLI(t, "0.1.0-dev")
+	root := t.TempDir()
+	store := config.Store{Root: root}
+	for _, name := range []string{"demo", "tools"} {
+		if _, err := store.Create(context.Background(), name, t.TempDir()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	executeBinary(t, binary, root, s.Config, "", 0, "setup", "--name", "fixture", "--ssh-alias", s.Alias, "--remote-binary", binary, "--remote-config-dir", root)
+	wizard := terminalCLI(t, binary, root, s.Config, "setup", "--interactive")
+	wizard.waitText(t, "输入序号")
+	wizard.write(t, "\r")
+	wizard.waitText(t, "发现 2 个项目")
+	wizard.waitText(t, "已保存连接 fixture")
+	wizard.exit(t, 0)
+}
+
+func TestSetupProjectPromptReleasesClientLock(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("private sshd integration runs on Linux")
+	}
+	s := testssh.Start(t)
+	binary := buildCLI(t, "0.1.0-dev")
+	root, remoteRoot := t.TempDir(), t.TempDir()
+	executeBinary(t, binary, root, s.Config, "", 0, "setup", "--name", "fixture", "--ssh-alias", s.Alias, "--remote-binary", binary, "--remote-config-dir", remoteRoot)
+	wizard := terminalCLI(t, binary, root, s.Config, "setup", "--interactive")
+	wizard.waitText(t, "输入序号")
+	wizard.write(t, "\r")
+	wizard.waitText(t, "现在添加第一个项目")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	unlock, err := (config.Store{Root: root}).Lock(ctx, "client", "config")
+	if err != nil {
+		t.Fatalf("project prompt holds client lock: %v", err)
+	}
+	unlock()
+	other := terminalCLI(t, binary, root, s.Config, "setup", "--interactive")
+	other.waitText(t, "输入序号")
+	other.write(t, "\r")
+	other.waitText(t, "现在添加第一个项目")
+	other.write(t, "n\r")
+	other.exit(t, 0)
+	wizard.write(t, "n\r")
+	wizard.exit(t, 0)
+}
+
 func TestSetupWizardAndFreshClientOverrides(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("private sshd integration runs on Linux")
 	}
 	s := testssh.Start(t)
-	binary := buildCLI(t, "0.0.3-dev")
+	binary := buildCLI(t, "0.1.0-dev")
 	root := t.TempDir()
 	remoteRoot := t.TempDir()
 	store := config.Store{Root: remoteRoot}
@@ -95,11 +146,11 @@ func TestSetupWizardAndFreshClientOverrides(t *testing.T) {
 	}
 	response := executeBinary(t, binary, root, s.Config, "", 0, "ls")
 	encoded, _ := json.Marshal(response.Data)
-	var projects map[string][]discoveredProject
+	var projects map[string]serverListing
 	if err = json.Unmarshal(encoded, &projects); err != nil {
 		t.Fatal(err)
 	}
-	listed := projects["fixture"][0]
+	listed := projects["fixture"].Projects[0]
 	if listed.Project.Windows[0].Name != "最新窗口_中文_🙂" || listed.Project.Forwards[0].ListenPort != localPort || listed.RemoteProject.Forwards[0].ListenPort != baselinePort {
 		t.Fatal("ls did not merge fresh remote configuration", listed)
 	}
@@ -130,7 +181,7 @@ func TestSetupWizardAndFreshClientOverrides(t *testing.T) {
 	response = executeBinary(t, binary, root, s.Config, "", 0, "ls")
 	encoded, _ = json.Marshal(response.Data)
 	_ = json.Unmarshal(encoded, &projects)
-	if len(projects["fixture"]) != 2 {
+	if len(projects["fixture"].Projects) != 2 {
 		t.Fatal("ls used a stale project list")
 	}
 	executeBinary(t, binary, root, s.Config, "", 2, "override", "demo", "--forward", "api", "--local-port", "65536")

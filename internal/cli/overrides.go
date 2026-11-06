@@ -20,6 +20,7 @@ type forwardOverride struct {
 type projectOverride struct {
 	ProjectID     string                     `yaml:"project_id" json:"project_id"`
 	Forwards      map[string]forwardOverride `yaml:"forwards,omitempty" json:"forwards,omitempty"`
+	MountPath     string                     `yaml:"mount_path,omitempty" json:"mount_path,omitempty"`
 	LocalForwards []config.Forward           `yaml:"local_forwards,omitempty" json:"local_forwards,omitempty"`
 }
 
@@ -84,10 +85,11 @@ type discoveredProject struct {
 	Project       config.Project `json:"project"`
 	RemoteProject config.Project `json:"remote_project"`
 	Session       tmux.Status    `json:"session"`
+	OverrideError string         `json:"override_error,omitempty"`
 }
 
 func mergeProject(remote config.Project, override projectOverride) (config.Project, error) {
-	if override.ProjectID == "" && len(override.Forwards) == 0 && len(override.LocalForwards) == 0 {
+	if override.ProjectID == "" && len(override.Forwards) == 0 && len(override.LocalForwards) == 0 && override.MountPath == "" {
 		return remote, nil
 	}
 	if override.ProjectID != remote.ID {
@@ -141,16 +143,25 @@ func mergeProject(remote config.Project, override projectOverride) (config.Proje
 }
 
 func (a *app) effective(t target, remote config.Project) (config.Project, error) {
-	if t.Local {
-		return remote, nil
-	}
 	return mergeProject(remote, t.Server.Projects[remote.Name])
 }
 
-func (a *app) discover(ctx context.Context, t target) ([]discoveredProject, error) {
-	if err := a.handshake(ctx, t, "project-v1"); err != nil {
+func decodeProjectDefinitions(data []byte) ([]discoveredProject, error) {
+	var definitions []config.Project
+	if err := json.Unmarshal(data, &definitions); err != nil {
 		return nil, err
 	}
+	projects := make([]discoveredProject, 0, len(definitions))
+	for _, p := range definitions {
+		if err := p.Validate(); err != nil {
+			return nil, err
+		}
+		projects = append(projects, discoveredProject{Project: p, RemoteProject: p, Session: tmux.Status{Project: p.Name, Status: "unknown"}})
+	}
+	return projects, nil
+}
+
+func (a *app) discover(ctx context.Context, t target) ([]discoveredProject, error) {
 	data, err := a.call(ctx, t, nil, "project", "list", "--status")
 	if err != nil {
 		return nil, err
@@ -167,7 +178,8 @@ func (a *app) discover(ctx context.Context, t target) ([]discoveredProject, erro
 		projects[i].RemoteProject = remote
 		projects[i].Project, err = a.effective(t, remote)
 		if err != nil {
-			return nil, err
+			projects[i].Project = remote
+			projects[i].OverrideError = err.Error()
 		}
 	}
 	return projects, nil
@@ -184,6 +196,14 @@ func (a *app) saveOverride(ctx context.Context, t target, remote config.Project,
 		return err
 	}
 	s, ok := p.Servers[t.Name]
+	if t.Local {
+		overrides, e := a.readOverrides()
+		if e != nil {
+			return e
+		}
+		s = server{Projects: overrides.Servers["local"]}
+		ok = true
+	}
 	if !ok {
 		return config.Invalid("server registration changed; rerun setup")
 	}
@@ -215,6 +235,7 @@ func (a *app) overrideCommand() {
 		if err != nil {
 			return nil, err
 		}
+		mountPath, _ := c.Flags().GetString("mount-path")
 		reset, _ := c.Flags().GetBool("reset")
 		id, _ := c.Flags().GetString("forward")
 		port, _ := c.Flags().GetInt("local-port")
@@ -222,7 +243,8 @@ func (a *app) overrideCommand() {
 		disable, _ := c.Flags().GetBool("disable")
 		enable, _ := c.Flags().GetBool("enable")
 		changed := c.Flags().Changed("local-port") || c.Flags().Changed("bind-address") || disable || enable
-		if reset && (id != "" || changed) {
+		mountChanged := c.Flags().Changed("mount-path")
+		if reset && (id != "" || changed || mountChanged) {
 			return nil, config.Invalid("--reset cannot be combined with forward changes")
 		}
 		if disable && enable {
@@ -231,7 +253,7 @@ func (a *app) overrideCommand() {
 		if changed && id == "" {
 			return nil, config.Invalid("--forward ID is required")
 		}
-		if reset || changed {
+		if reset || changed || mountChanged {
 			err = a.saveOverride(ctx, t, remote, func(o *projectOverride) error {
 				if reset {
 					*o = projectOverride{}
@@ -241,6 +263,15 @@ func (a *app) overrideCommand() {
 					return config.Invalid("project identity changed; reset local overrides first")
 				}
 				o.ProjectID = remote.ID
+				if mountChanged {
+					if mountPath == "" || !filepath.IsAbs(mountPath) || !config.SafeText(mountPath) {
+						return config.Invalid("mount path must be absolute")
+					}
+					o.MountPath = mountPath
+				}
+				if !changed {
+					return nil
+				}
 				if o.Forwards == nil {
 					o.Forwards = map[string]forwardOverride{}
 				}
@@ -278,6 +309,7 @@ func (a *app) overrideCommand() {
 		}
 		return map[string]any{"remote_project": remote, "project": effective, "overrides": t.Server.Projects[remote.Name]}, nil
 	})
+	c.Flags().String("mount-path", "", "default local mount directory")
 	c.Flags().String("forward", "", "stable remote forward ID (shown by tdev ls or tdev override)")
 	c.Flags().Int("local-port", 0, "override the local listening port")
 	c.Flags().String("bind-address", "", "override the local bind address")
