@@ -1,8 +1,30 @@
 # 开发验收记录
 
-Last verified: 2026-11-06。源码版本：0.2.1。下表保留集成验收使用的开发版版本号。
+Last verified: 2026-11-08。源码版本：0.3.0。下表保留集成验收使用的开发版版本号。
 
 本记录汇总第一版核心功能的自动化验证、环境实测和待验证项。
+
+## v0.3.0 版本验收
+
+2026-11-08：默认构建、源码及发布说明统一为 0.3.0。完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 179 秒，包含真实隔离 SSH/tmux 分屏、保存恢复及诊断回归。`make check`、`make cross`、`make build` 通过；最终二进制 JSON version 返回 0.3.0、pane-layout-v1，协议及 schema 均为 1。四平台二进制格式及架构校验通过，新增内容、文件名与构建路径扫描未发现凭据或内部环境标识。原生执行环境为 Linux；macOS 原生交互、实际 FUSE 挂载及极小终端尺寸下布局恢复待对应环境验证。
+
+## doctor 自然语言诊断验收
+
+2026-11-08：普通 `doctor` 与指定项目输出自然语言结论、影响和处理建议；`--json` 保留结构化数据。单元测试覆盖未启动会话、初始化未完成、可选依赖缺失、离线缓存、客户端覆盖错误、配置读取失败及 JSON 输出分流。真实隔离 SSH/tmux 验证全局及指定项目解释同名未托管会话，JSON 保留原始 warning。列表终端回归检查最终刷新内容及 syncing 提示消失，适配健康服务器省略 synced 尾注的展示。
+
+完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 125 秒；最终定向 doctor、跨服务器列表与离线刷新回归通过。`make check`（go vet、gofmt、diff 与脚本语法）和 `make build` 通过。构建产物以临时配置及私有 tmux socket 验证普通文本和 JSON。原生执行环境为 Linux；本轮验证输出解释，实际 FUSE 挂载及 macOS 原生显示待对应环境验证。
+
+## ls 表格验收
+
+2026-11-06：列表增加独立 FORWARDS 列，以 `监听地址:端口 -> 目标地址:端口` 展示 L 方向，R 使用 `<-`，隐藏映射 ID；多条映射按列向下排列。单元测试验证中文对齐、首条映射同行、后续映射列对齐、双向箭头、IPv6 方括号及 ID 隐藏。真实隔离 SSH/PTY 定向回归通过，覆盖表头、空服务器行、中文名称列宽、缓存先显示与远端放行后刷新、离线缓存及 warning 状态行。构建产物使用临时配置创建本机项目后，实际 ls 输出 SERVER、NAME、TYPE、STATUS、DIR、FORWARDS 六列。完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 122 秒，包含真实隔离 SSH/tmux；`make check`、`make build` 与四平台 `make cross` 通过。原生执行环境为 Linux；macOS 原生显示及窄终端下长路径换行待实测，管道保留完整路径。
+
+## pane 分屏验收
+
+2026-11-06：真实私有 tmux socket 测试覆盖横向与纵向嵌套、不同目录（含空格及中文）、不等比例布局、启动命令只执行一次、服务输出保留、手动新增 pane、保存后停止与重建，以及合并为单 pane 后再次保存仍保留命令。缺失 pane 目录时会话保持 missing。旧版服务窗口缺少 pane 身份时拒绝猜测命令归属，补齐原 pane 标记后保存成功。真实隔离 SSH 验证分屏定义读写、ensure/save，以及缺少 pane-layout-v1 的服务端在写入前被能力检查拒绝。
+
+11 份配置使用最终构建产物完成独立隔离冒烟，共 38 个窗口、42 个 pane。核对窗口名称、目录、pane 数量和 save；启动服务替换为无害标记命令，测试前后既有 tmux pane 身份一致。迁移保留原配置及备份，实际服务命令的应用行为未在冒烟中运行。
+
+完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...`、`make check`、`make build` 和四平台 `make cross` 通过。原生执行环境为 Linux；macOS 分屏原生交互及极小终端尺寸下的布局恢复待对应环境实测。布局按可用单元格近似恢复；空间不足时保留 incomplete 会话供检查。
 
 ## v0.2.1 版本验收
 
@@ -130,7 +152,7 @@ darwin amd64/arm64 为对应架构 Mach-O。Linux amd64 与 Mac arm64 产物已�
 | 并发 ensure | 8 个并发调用只启动一次服务，不重复窗口或启动命令 |
 | 未完成初始化 | 保留现场并报错，不重放已启动的命令 |
 | 服务退出 | 窗口保留输出与退出状态，再次 ensure 不重启 |
-| save | 保留声明命令与转发；排除临时窗口，纳入手工单 pane 窗口，多 pane 拒绝落盘 |
+| save | 保留声明命令与转发；排除临时窗口，纳入手工窗口及多 pane 布局 |
 | shell | 临时和持久窗口行为、配置保存、会话复用通过真实 tmux 验证 |
 | L/R 监听与数据 | 独立 sshd 上两种方向真实 ready 和 echo 数据往返通过 |
 | 端口竞争 | 第二个连接失败，原连接继续工作，不抢占或停止已有监听 |

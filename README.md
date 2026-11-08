@@ -4,10 +4,10 @@
 选择已有连接或填写服务器地址，读取目标设备的项目配置，随后打开项目继续开发。
 复用系统 OpenSSH 和 tmux，远端无需数据库、HTTP API 或常驻 tdev 服务。
 
-当前源码版本为 `0.2.1`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
+当前源码版本为 `0.3.0`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
 挂载、签名安装升级和回滚。设计基线见[产品与技术设计](docs/design.md)，实现取舍见
 [开发记录](docs/development.md)，实际通过与尚未实测的场景见[第一版验收记录](docs/acceptance.md)。
-版本变更见[发布说明](docs/releases/v0.2.1.md)。二进制 Release 位于
+版本变更见[发布说明](docs/releases/v0.3.0.md)。二进制 Release 位于
 [GitHub](https://github.com/JourneyBean/tdev/releases)。
 
 ## 安装
@@ -66,7 +66,7 @@ tdev open dev/demo
 
 完整标识为 `server/project`。裸名称先查本机，再按服务器名称排序查找远端；自动匹配时显示完整目标。缓存命中的目标离线时报告错误。裸名称 create 默认在本机创建；不带项目名的 create 向导先选择位置，本机为默认项。
 
-`ls` 的标准输出为终端时，先展示本机与远端缓存及 `syncing`，再并发查询每台服务器，逐项更新为 `synced`。项目 warning 合并在状态标签中，如 `[running,warning]`，列表末尾统一提示 `tdev doctor`；该命令展示完整诊断，也可用 `tdev doctor server/project` 单独检查项目。连接失败保留带时间的缓存并标记 `unreachable`，协议不兼容标记 `upgrade-required`，服务器应用错误标记 `error`。管道输出只展示最终列表；`--json` 返回一次结构化结果，包含位置、状态、更新时间和项目。部分失败时退出码为 9，结果保留在错误的 details 中。
+`ls` 默认以 `SERVER、NAME、TYPE、STATUS、DIR、FORWARDS` 六列表格展示，中文按终端显示宽度对齐。端口映射显示在 `FORWARDS` 列，多条映射向下排列；列内以 `监听地址:端口 -> 目标地址:端口` 表示本地转发（`-L`），反向转发（`-R`）使用 `<-`，省略映射 ID。标准输出为终端时，先展示本机与远端缓存，表格下方显示服务器 `syncing`；随后并发查询每台服务器，更新条目并移除已完成的刷新提示。项目 warning 合并在状态列中，如 `running,warning`，列表末尾统一提示 `tdev doctor`；该命令展示完整诊断，也可用 `tdev doctor server/project` 单独检查项目。连接失败保留带时间的缓存并标记 `unreachable`，协议不兼容标记 `upgrade-required`，服务器应用错误标记 `error`。管道输出只展示最终列表；`--json` 返回一次结构化结果，包含位置、状态、更新时间和项目。部分失败时退出码为 9，结果保留在错误的 details 中。
 
 缓存位于系统临时目录的用户私有目录，供列表展示和项目发现。实际操作始终读取目标机器的最新项目定义，再应用当前客户端 override。项目配置保存在项目所在机器。
 
@@ -120,6 +120,31 @@ tdev stop dev/demo -y
 tmux session 优先使用项目名称，如 `demo`，归属按项目 UUID 标记识别。旧版或手工改名的托管 session 可直接复用，名称差异显示 warning。同名普通会话保留，`ls` 显示 `unmanaged` 和 warning，`open` 创建独立的 `tdev-<UUID>` 托管会话。warning 保持列表刷新成功；多个会话使用同一项目 UUID 时，接管或停止操作需先确认归属。
 
 open 遇到项目不存在时，确认后进入创建向导，保存后继续打开。新项目默认窗口为 `main`，已有项目沿用保存的名称。sh 的新窗口默认叫 `shell`，`--name` 可指定名称。
+
+## 分屏布局
+
+在项目的 tmux 窗口中手动分屏后运行 `tdev save`，即可保存布局。新建会话时恢复分屏方向、嵌套结构、比例和各 pane 的目录。已声明的 pane 启动命令继续保留，手动新增 pane 保存为空 shell。
+
+也可通过 `tdev edit <项目> --stdin --expected-revision N` 设置窗口的 `layout`；完整输入使用 `tdev show` 返回的 `definition`。例如窗口定义：
+
+```yaml
+id: web
+name: web
+directory: .
+layout:
+  split: vertical
+  panes:
+    - id: frontend
+      directory: frontend
+      command: npm run dev
+    - id: backend
+      directory: backend
+      command: uv run server.py
+```
+
+`horizontal` 表示左右排列，`vertical` 表示上下排列；子节点可以继续分屏。叶节点的 `id` 在窗口内唯一，目录相对项目根目录解析，`weight` 可指定同级空间比例。单 pane 窗口继续使用原来的 `directory` 和 `command` 字段。
+
+使用分屏配置时，项目所在机器及编辑配置的客户端需支持 `pane-layout-v1`；远端写入会检查该能力。布局按可用单元格近似恢复。已有会话继续运行原布局，新建会话使用保存的配置。
 
 ## 诊断日志
 
@@ -235,7 +260,7 @@ tdev override demo --forward api --local-port 8080
 tdev override demo --reset               # 恢复远端默认值
 ```
 
-`api` 是远端映射的稳定 ID，可从 `tdev ls` 查看。项目目录、窗口和命令实时读取，本机只保存端口差异及附加转发。
+`api` 是远端映射的稳定 ID，可从 `tdev show` 查看。项目目录、窗口和命令实时读取，本机只保存端口差异及附加转发。
 
 ```sh
 tdev forward demo -L 3000:localhost:8000

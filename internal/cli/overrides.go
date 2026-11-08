@@ -310,7 +310,7 @@ func (a *app) overrideCommand() {
 		return map[string]any{"remote_project": remote, "project": effective, "overrides": t.Server.Projects[remote.Name]}, nil
 	})
 	c.Flags().String("mount-path", "", "default local mount directory")
-	c.Flags().String("forward", "", "stable remote forward ID (shown by tdev ls or tdev override)")
+	c.Flags().String("forward", "", "stable remote forward ID (shown by tdev show or tdev override)")
 	c.Flags().Int("local-port", 0, "override the local listening port")
 	c.Flags().String("bind-address", "", "override the local bind address")
 	c.Flags().Bool("disable", false, "disable this local forward on this client")

@@ -214,8 +214,11 @@ func (a *app) workspaceCommands() {
 		local := a.clientDoctor()
 		if len(args) == 0 {
 			listing, err := a.refreshProjects(ctx, c, false)
-			report := map[string]any{"client": local, "servers": listing}
+			report := doctorReport{Client: local, Servers: listing}
 			if err != nil {
+				if listing == nil {
+					report.checkError = protocol.Normalize(err)
+				}
 				if !a.json {
 					if writeErr := a.result(report, nil); writeErr != nil {
 						return nil, writeErr
@@ -237,11 +240,11 @@ func (a *app) workspaceCommands() {
 		}
 		projects, err := a.discover(ctx, t)
 		if err != nil {
-			return map[string]any{"client": local, "remote": remote, "project_error": protocol.Normalize(err)}, nil
+			return doctorReport{Client: local, Remote: remote, ProjectError: protocol.Normalize(err)}, nil
 		}
 		for _, project := range projects {
 			if project.Project.Name == t.Project {
-				return map[string]any{"client": local, "remote": remote, "project": project}, nil
+				return doctorReport{Client: local, Remote: remote, Project: &project, projectLabel: t.Name + "/" + t.Project}, nil
 			}
 		}
 		return nil, protocol.Fail("PROJECT_NOT_FOUND", 3, "project %q does not exist", t.Project)

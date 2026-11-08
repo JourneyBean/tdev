@@ -212,11 +212,16 @@ func TestDiscoveryCacheRefreshAndOffline(t *testing.T) {
 		t.Fatal(data, err)
 	}
 	view := terminalCLI(t, binary, root, s.Config, "ls")
-	view.waitText(t, "dev · 2 个项目 · 远端 [syncing]")
-	view.waitText(t, "dev/demo")
+	view.waitText(t, "dev [syncing]")
+	view.waitText(t, "demo")
 	view.exit(t, 0)
-	if !strings.Contains(view.output.String(), "synced") {
-		t.Fatal("interactive refresh did not finish", view.output.String())
+	// A successful exit completes the refresh; healthy servers have no status footer.
+	finalView := view.output.String()
+	if redraw := strings.LastIndex(finalView, "\x1b[J"); redraw >= 0 {
+		finalView = finalView[redraw+len("\x1b[J"):]
+	}
+	if !strings.Contains(finalView, "new") || strings.Contains(finalView, "[syncing]") {
+		t.Fatal("interactive refresh did not finish", finalView)
 	}
 	prefs, _ := a.prefs()
 	target, _ := a.serverTarget(prefs, "dev", "")

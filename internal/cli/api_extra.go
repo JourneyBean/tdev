@@ -60,13 +60,13 @@ func (a *app) apiExtras(local, session *cobra.Command) {
 	a.apiUpdate(local)
 }
 func versionData() map[string]any {
-	return map[string]any{"version": Version, "protocol_version": 1, "schema_version": 1, "capabilities": []string{"api-v1", "scratch-v1", "project-v1", "config-revision-v1", "session-v1", "attachment-v1", "transfer-v1", "transfer-file-directory-v1", "binary-install-v1", "mount-probe-nfc-v1"}}
+	return map[string]any{"version": Version, "protocol_version": 1, "schema_version": 1, "capabilities": []string{"api-v1", "scratch-v1", "project-v1", "pane-layout-v1", "config-revision-v1", "session-v1", "attachment-v1", "transfer-v1", "transfer-file-directory-v1", "binary-install-v1", "mount-probe-nfc-v1"}}
 }
-func (a *app) clientDoctor() any {
-	paths := map[string]any{}
+func (a *app) clientDoctor() doctorClient {
+	paths := map[string]doctorDependency{}
 	for _, name := range []string{"ssh", "scp", "sshfs", "umount"} {
 		p, err := exec.LookPath(name)
-		paths[name] = map[string]any{"available": err == nil, "path": p}
+		paths[name] = doctorDependency{Available: err == nil, Path: p}
 	}
-	return map[string]any{"os": runtime.GOOS, "arch": runtime.GOARCH, "version": Version, "protocol_version": 1, "dependencies": paths, "config_root": a.store.Root}
+	return doctorClient{OS: runtime.GOOS, Arch: runtime.GOARCH, Version: Version, ProtocolVersion: 1, Dependencies: paths, ConfigRoot: a.store.Root}
 }

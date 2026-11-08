@@ -72,8 +72,8 @@ func TestListShowsCacheBeforeRemoteRefresh(t *testing.T) {
 	go func() { _, _ = io.Copy(&view.output, master) }()
 	go func() { view.done <- cmd.Wait() }()
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = master.Close() })
-	view.waitText(t, "dev · 1 个项目 · 远端 [syncing]")
-	view.waitText(t, "dev/cached")
+	view.waitText(t, "dev [syncing]")
+	view.waitText(t, "cached  project")
 	select {
 	case err := <-view.done:
 		t.Fatalf("listing exited before remote was released: %v", err)
@@ -82,14 +82,13 @@ func TestListShowsCacheBeforeRemoteRefresh(t *testing.T) {
 	if _, err := store.Create(context.Background(), "fresh", t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(view.output.String(), "dev/fresh") {
+	if strings.Contains(view.output.String(), "fresh   project") {
 		t.Fatal("displayed data before remote discovery")
 	}
 	if err := os.WriteFile(gate, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	view.waitText(t, "dev · 2 个项目 · 远端 [synced]")
-	view.waitText(t, "dev/fresh")
+	view.waitText(t, "fresh   project")
 	view.exit(t, 0)
 	// Cache files should also include local projects after a refresh.
 	localStore := config.Store{Root: root}
@@ -168,8 +167,8 @@ func TestListProjectsAcrossServers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err, string(output))
 	}
-	for _, text := range []string{"empty · 0 个项目", "populated · 1 个项目", "populated/demo"} {
-		if !strings.Contains(string(output), text) {
+	for _, text := range []string{"SERVER NAME TYPE STATUS DIR FORWARDS", "empty — — synced —", "populated demo project missing"} {
+		if !strings.Contains(strings.Join(strings.Fields(string(output)), " "), text) {
 			t.Fatalf("human listing missing %q: %s", text, output)
 		}
 	}
@@ -210,7 +209,14 @@ func TestListProjectsAcrossServers(t *testing.T) {
 			t.Fatalf("healthy project missing: %+v", entry)
 		}
 		output, err := exec.Command(binary, "--config-dir", root, "--ssh-config", s.Config, "ls").CombinedOutput()
-		if err != nil || strings.Contains(string(output), "warning:") || !strings.Contains(string(output), "populated/demo [unmanaged,warning]") || strings.Count(string(output), "运行 tdev doctor") != 1 || strings.Contains(string(output), "unreachable") {
+		hasWarningRow := false
+		for _, line := range strings.Split(string(output), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 5 && fields[0] == "populated" && fields[1] == "demo" && fields[2] == "project" && fields[3] == "unmanaged,warning" {
+				hasWarningRow = true
+			}
+		}
+		if err != nil || strings.Contains(string(output), "warning:") || !hasWarningRow || strings.Count(string(output), "运行 tdev doctor") != 1 || strings.Contains(string(output), "unreachable") {
 			t.Fatalf("human warning listing: %v %s", err, output)
 		}
 		for _, args := range [][]string{{"doctor"}, {"doctor", "populated/demo"}} {
@@ -219,6 +225,11 @@ func TestListProjectsAcrossServers(t *testing.T) {
 			warning, _ := json.Marshal(listing["populated"].Projects[0].Session.Warning)
 			if !strings.Contains(string(encoded), string(warning)) {
 				t.Fatalf("doctor omitted session warning: %s", encoded)
+			}
+			humanArgs := append([]string{"--config-dir", root, "--ssh-config", s.Config}, args...)
+			human, err := exec.Command(binary, humanArgs...).CombinedOutput()
+			if err != nil || !strings.Contains(string(human), "同名 tmux 会话未匹配项目标记") || strings.Contains(string(human), `"client":`) {
+				t.Fatalf("human doctor diagnosis: %v %s", err, human)
 			}
 		}
 		open := terminalCLI(t, binary, root, s.Config, "open", "local/demo")

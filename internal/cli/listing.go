@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -187,30 +189,28 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 	return results, nil
 }
 func (listing projectListing) print(out io.Writer) error {
+	rows := [][6]string{}
+	notes := []string{}
 	hasWarnings := false
 	for _, name := range listingNames(listing) {
 		entry := listing[name]
-		location := "远端"
-		if entry.Location == "local" {
-			location = "本机"
-		}
-		if _, err := fmt.Fprintf(out, "%s · %d 个项目 · %s [%s]\n", name, len(entry.Projects), location, entry.State); err != nil {
-			return err
+		if entry.State != "synced" {
+			notes = append(notes, fmt.Sprintf("%s [%s]", name, entry.State))
 		}
 		if entry.ScratchWarning != "" {
-			fmt.Fprintf(out, "  %s\n", entry.ScratchWarning)
-		}
-		if len(entry.Scratches) > 0 {
-			fmt.Fprintf(out, "  %d 个 scratch 会话\n", len(entry.Scratches))
+			notes = append(notes, name+": "+entry.ScratchWarning)
 		}
 		if entry.Error != "" {
-			fmt.Fprintf(out, "  %s\n", entry.Error)
+			notes = append(notes, name+": "+entry.Error)
 			if !entry.UpdatedAt.IsZero() {
-				fmt.Fprintf(out, "  缓存：%s\n", entry.UpdatedAt.Format(time.RFC3339))
+				notes = append(notes, fmt.Sprintf("%s 缓存：%s", name, entry.UpdatedAt.Format(time.RFC3339)))
 			}
 		}
-		if len(entry.Projects) == 0 && len(entry.Scratches) == 0 && entry.State == "synced" {
-			fmt.Fprintf(out, "  添加项目：tdev create --server %s\n", name)
+		if len(entry.Projects) == 0 && len(entry.Scratches) == 0 {
+			rows = append(rows, [6]string{name, "—", "—", entry.State, "—", "—"})
+			if entry.State == "synced" {
+				notes = append(notes, "添加项目：tdev create --server "+name)
+			}
 		}
 		for _, project := range entry.Projects {
 			status := project.Session.Status
@@ -218,18 +218,80 @@ func (listing projectListing) print(out io.Writer) error {
 				status += ",warning"
 				hasWarnings = true
 			}
-			fmt.Fprintf(out, "  %s/%s [%s] [project]\n    %s\n", name, project.Project.Name, status, project.Project.Directory)
-			for _, f := range project.Project.Forwards {
-				fmt.Fprintf(out, "    %s -%s %s\n", f.ID, f.Direction, f.Spec())
+			rows = append(rows, [6]string{name, project.Project.Name, "project", status, project.Project.Directory, "—"})
+			for i, f := range project.Project.Forwards {
+				direction := "->"
+				if f.Direction == "R" {
+					direction = "<-"
+				}
+				mapping := fmt.Sprintf("%s %s %s",
+					net.JoinHostPort(f.BindAddress, strconv.Itoa(f.ListenPort)), direction,
+					net.JoinHostPort(f.TargetHost, strconv.Itoa(f.TargetPort)))
+				if i == 0 {
+					rows[len(rows)-1][5] = mapping
+				} else {
+					rows = append(rows, [6]string{"", "", "", "", "", mapping})
+				}
 			}
 		}
 		for _, scratch := range entry.Scratches {
-			fmt.Fprintf(out, "  %s/%s [scratch,%s]\n    %s\n    恢复：tdev open %s/%s\n", name, scratch.Name, scratch.Status.Status, scratch.Directory, name, scratch.Name)
+			rows = append(rows, [6]string{name, scratch.Name, "scratch", scratch.Status.Status, scratch.Directory, "—"})
+			rows = append(rows, [6]string{"", "", "", "", fmt.Sprintf("恢复：tdev open %s/%s", name, scratch.Name)})
 		}
 	}
-	if hasWarnings {
-		_, err := fmt.Fprintln(out, "\n部分项目有 warning，运行 tdev doctor 查看诊断详情。")
+	if err := printListingTable(out, rows); err != nil {
 		return err
+	}
+	if hasWarnings {
+		notes = append(notes, "部分项目有 warning，运行 tdev doctor 查看诊断详情。")
+	}
+	if len(notes) > 0 {
+		_, err := fmt.Fprintln(out, "\n"+strings.Join(notes, "\n"))
+		return err
+	}
+	return nil
+}
+
+// Measure terminal cells so CJK names and paths align with ASCII text.
+func printListingTable(out io.Writer, rows [][6]string) error {
+	header := [6]string{"SERVER", "NAME", "TYPE", "STATUS", "DIR", "FORWARDS"}
+	widths := [5]int{}
+	for i := range widths {
+		widths[i] = ansi.StringWidth(header[i])
+		for _, row := range rows {
+			widths[i] = max(widths[i], ansi.StringWidth(row[i]))
+		}
+	}
+	writeRow := func(row [6]string) error {
+		var line strings.Builder
+		line.WriteString("  ")
+		for i, cell := range row {
+			line.WriteString(cell)
+			if i < len(widths) {
+				line.WriteString(strings.Repeat(" ", widths[i]-ansi.StringWidth(cell)+2))
+			}
+		}
+		_, err := fmt.Fprintln(out, strings.TrimRight(line.String(), " "))
+		return err
+	}
+	if err := writeRow(header); err != nil {
+		return err
+	}
+	separator := [6]string{}
+	for i, cell := range header {
+		width := ansi.StringWidth(cell)
+		if i < len(widths) {
+			width = widths[i]
+		}
+		separator[i] = strings.Repeat("─", width)
+	}
+	if err := writeRow(separator); err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := writeRow(row); err != nil {
+			return err
+		}
 	}
 	return nil
 }

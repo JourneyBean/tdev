@@ -36,7 +36,43 @@ type Window struct {
 	Name      string `yaml:"name" json:"name"`
 	Directory string `yaml:"directory" json:"directory"`
 	Command   string `yaml:"command,omitempty" json:"command,omitempty"`
+	Layout    *Pane  `yaml:"layout,omitempty" json:"layout,omitempty"`
 }
+
+// Pane is either a leaf with a stable ID, directory and declared command, or a
+// split whose children are ordered left-to-right or top-to-bottom. Weight is
+// relative to siblings; zero requests equal space.
+type Pane struct {
+	ID        string `yaml:"id,omitempty" json:"id,omitempty"`
+	Directory string `yaml:"directory,omitempty" json:"directory,omitempty"`
+	Command   string `yaml:"command,omitempty" json:"command,omitempty"`
+	Split     string `yaml:"split,omitempty" json:"split,omitempty"`
+	Panes     []Pane `yaml:"panes,omitempty" json:"panes,omitempty"`
+	Weight    int    `yaml:"weight,omitempty" json:"weight,omitempty"`
+}
+
+func (p Pane) validate(ids map[string]bool, depth int) error {
+	if depth > 16 || p.Weight < 0 || p.Weight > 100000 {
+		return Invalid("invalid pane depth or weight")
+	}
+	if p.Split != "" {
+		if (p.Split != "horizontal" && p.Split != "vertical") || len(p.Panes) < 2 || p.ID != "" || p.Directory != "" || p.Command != "" {
+			return Invalid("split panes require horizontal/vertical and at least two children")
+		}
+		for _, child := range p.Panes {
+			if err := child.validate(ids, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if len(p.Panes) != 0 || !ValidName(p.ID) || ids[p.ID] || !SafeText(p.Directory) || !utf8.ValidString(p.Command) || strings.ContainsRune(p.Command, 0) {
+		return Invalid("invalid or duplicate pane %q", p.ID)
+	}
+	ids[p.ID] = true
+	return nil
+}
+
 type Forward struct {
 	ID          string `yaml:"id" json:"id"`
 	Direction   string `yaml:"direction" json:"direction"`
@@ -94,6 +130,14 @@ func (p Project) Validate() error {
 			return Invalid("invalid or duplicate window %q", w.ID)
 		}
 		ids[w.ID] = true
+		if w.Layout != nil {
+			if w.Command != "" {
+				return Invalid("window command must be specified on layout leaves")
+			}
+			if err := w.Layout.validate(map[string]bool{}, 0); err != nil {
+				return err
+			}
+		}
 	}
 	ids = map[string]bool{}
 	listeners := map[string]bool{}

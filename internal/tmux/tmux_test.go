@@ -85,13 +85,9 @@ func TestConcurrentEnsureSaveAndStop(t *testing.T) {
 	if _, err = m.run(ctx, "split-window", "-d", "-t", windows[0].WindowID); err != nil {
 		t.Fatal(err)
 	}
-	_, err = m.Save(ctx, saved, saved.Revision)
-	if protocol.Normalize(err).Code != "UNSUPPORTED_LAYOUT" {
-		t.Fatalf("multi pane: %v", err)
-	}
-	unchanged, err := m.Store.Get(p.Name)
-	if err != nil || unchanged.Revision != saved.Revision {
-		t.Fatalf("failed save mutated config: %+v %v", unchanged, err)
+	saved, err = m.Save(ctx, saved, saved.Revision)
+	if err != nil || saved.Windows[0].Layout == nil || len(saved.Windows[0].Layout.Panes) != 2 {
+		t.Fatalf("multi pane save: %+v %v", saved, err)
 	}
 	if _, err = m.Stop(ctx, p); err != nil {
 		t.Fatal(err)

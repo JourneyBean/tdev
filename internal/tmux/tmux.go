@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -28,6 +29,8 @@ type Status struct {
 type LiveWindow struct {
 	ID, Name, Directory, WindowID, Persist string
 	Panes                                  int
+	Layout                                 string
+	Leaves                                 []livePane
 }
 
 func SessionName(p config.Project) string { return p.Name }
@@ -143,6 +146,11 @@ func (m Manager) Ensure(ctx context.Context, p config.Project) (Status, error) {
 	}
 	// Validate every directory before making any runtime changes.
 	for _, w := range p.Windows {
+		if w.Layout != nil {
+			if err := validatePaneDirectories(p, *w.Layout); err != nil {
+				return s, err
+			}
+		}
 		info, err := os.Stat(config.WindowPath(p, w))
 		if err != nil || !info.IsDir() {
 			return s, config.Invalid("window directory missing: %s", config.WindowPath(p, w))
@@ -171,17 +179,26 @@ func (m Manager) Ensure(ctx context.Context, p config.Project) (Status, error) {
 		if err = m.markWindow(ctx, wid, w.ID, true); err != nil {
 			return s, err
 		}
+		pane, err := m.run(ctx, "display-message", "-p", "-t", wid, "#{pane_id}")
+		if err != nil {
+			return s, err
+		}
+		if w.Layout != nil {
+			if _, err = m.run(ctx, "set-window-option", "-t", wid, "remain-on-exit", "on"); err != nil {
+				return s, err
+			}
+			if err = m.restoreLayout(ctx, p, pane, *w.Layout); err != nil {
+				return s, err
+			}
+			continue
+		}
 		if w.Command != "" {
 			if _, err = m.run(ctx, "set-window-option", "-t", wid, "remain-on-exit", "on"); err != nil {
 				return s, err
 			}
-			shell := os.Getenv("SHELL")
-			if shell == "" {
-				shell = "/bin/sh"
-			}
-			if _, err = m.run(ctx, "respawn-pane", "-k", "-t", wid, "-c", config.WindowPath(p, w), Quote(shell)+" -lc "+Quote(w.Command)); err != nil {
-				return s, err
-			}
+		}
+		if err = m.startPane(ctx, pane, w.ID, config.WindowPath(p, w), w.Command); err != nil {
+			return s, err
 		}
 	}
 	if _, err = m.run(ctx, "set-option", "-t", id, "@tdev_initialization", "ready"); err != nil {
@@ -224,14 +241,14 @@ func (m Manager) Stop(ctx context.Context, p config.Project) (Status, error) {
 	return m.Status(ctx, p)
 }
 func (m Manager) Windows(ctx context.Context, s Status) ([]LiveWindow, error) {
-	out, err := m.run(ctx, "list-windows", "-t", s.SessionID, "-F", "#{window_id}\t#{@tdev_window_id}\t#{window_name}\t#{window_panes}\t#{@tdev_persist}")
+	out, err := m.run(ctx, "list-windows", "-t", s.SessionID, "-F", "#{window_id}\t#{@tdev_window_id}\t#{window_name}\t#{window_panes}\t#{@tdev_persist}\t#{window_layout}")
 	if err != nil {
 		return nil, err
 	}
 	var windows []LiveWindow
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(line, "\t")
-		if len(f) != 5 {
+		if len(f) != 6 {
 			return nil, config.Invalid("window metadata contains unsupported control characters")
 		}
 		n, _ := strconv.Atoi(f[3])
@@ -245,7 +262,19 @@ func (m Manager) Windows(ctx context.Context, s Status) ([]LiveWindow, error) {
 				return nil, err
 			}
 		}
-		windows = append(windows, LiveWindow{WindowID: f[0], ID: f[1], Name: f[2], Panes: n, Persist: f[4], Directory: dir})
+		panes, err := m.run(ctx, "list-panes", "-t", f[0], "-F", "#{pane_id}\t#{@tdev_pane_id}\t#{?pane_current_path,#{pane_current_path},#{pane_start_path}}")
+		if err != nil {
+			return nil, err
+		}
+		w := LiveWindow{WindowID: f[0], ID: f[1], Name: f[2], Panes: n, Persist: f[4], Directory: dir, Layout: f[5]}
+		for _, line := range strings.Split(panes, "\n") {
+			fields := strings.Split(line, "\t")
+			if len(fields) != 3 || fields[2] == "" {
+				return nil, config.Invalid("invalid pane metadata")
+			}
+			w.Leaves = append(w.Leaves, livePane{PaneID: fields[0], ID: fields[1], Directory: fields[2]})
+		}
+		windows = append(windows, w)
 	}
 	return windows, nil
 }
@@ -263,17 +292,13 @@ func (m Manager) Save(ctx context.Context, p config.Project, expected int) (conf
 	if err != nil {
 		return p, err
 	}
-	for _, w := range before {
-		if w.Panes != 1 {
-			return p, protocol.Fail("UNSUPPORTED_LAYOUT", 2, "window %q has multiple panes; configuration was not changed", w.Name)
-		}
-	}
 	old := map[string]config.Window{}
 	for _, w := range p.Windows {
 		old[w.ID] = w
 	}
 	var windows []config.Window
 	adopt := map[string]string{}
+	adoptPanes := map[string]string{}
 	for _, w := range before {
 		if w.Persist == "0" {
 			continue
@@ -285,13 +310,26 @@ func (m Manager) Save(ctx context.Context, p config.Project, expected int) (conf
 		}
 		v.Name = w.Name
 		v.Directory = w.Directory
+		layout, err := savedLayout(w, v, adoptPanes)
+		if err != nil {
+			return p, err
+		}
+		if layout.Split == "" {
+			v.Layout = nil
+			v.Directory, v.Command = layout.Directory, layout.Command
+			// Single-pane definitions use the window ID as their pane identity.
+			adoptPanes[w.Leaves[0].PaneID] = v.ID
+		} else {
+			v.Layout = layout
+			v.Command = ""
+		}
 		windows = append(windows, v)
 	}
 	after, err := m.Windows(ctx, s)
 	if err != nil {
 		return p, err
 	}
-	if fmt.Sprint(before) != fmt.Sprint(after) {
+	if !reflect.DeepEqual(before, after) {
 		return p, protocol.Fail("SESSION_CONFLICT", 4, "session changed while collecting windows")
 	}
 	if expected == 0 {
@@ -304,6 +342,11 @@ func (m Manager) Save(ctx context.Context, p config.Project, expected int) (conf
 	for wid, id := range adopt {
 		if err = m.markWindow(ctx, wid, id, true); err != nil {
 			return saved, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "configuration saved but adopted window marker update failed: " + err.Error(), Details: saved}
+		}
+	}
+	for pane, id := range adoptPanes {
+		if _, err = m.run(ctx, "set-option", "-p", "-t", pane, "@tdev_pane_id", id); err != nil {
+			return saved, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "configuration saved but pane marker update failed", Details: saved}
 		}
 	}
 	return saved, nil

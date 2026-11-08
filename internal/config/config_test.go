@@ -164,3 +164,37 @@ func TestUTF8Validation(t *testing.T) {
 		t.Fatal("project identifiers must still follow the documented ASCII slug schema")
 	}
 }
+
+func TestPaneLayoutValidation(t *testing.T) {
+	s := Store{Root: t.TempDir()}
+	p, err := s.Create(context.Background(), "demo", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := Pane{ID: "api", Directory: ".", Command: "printf ready"}
+	valid := Pane{Split: "horizontal", Panes: []Pane{leaf, {Split: "vertical", Panes: []Pane{{ID: "editor"}, {ID: "logs"}}}}}
+	p.Windows[0].Layout = &valid
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range []Pane{
+		{Split: "diagonal", Panes: []Pane{leaf, {ID: "other"}}},
+		{Split: "vertical", Panes: []Pane{leaf}},
+		{Split: "horizontal", Panes: []Pane{leaf, leaf}},
+		{ID: "bad", Directory: "bad\npath"},
+		{ID: "bad", Command: "bad\x00command"},
+		{ID: "bad", Weight: -1},
+		{ID: "bad", Panes: []Pane{leaf}},
+		{Split: "horizontal", Command: "ignored", Panes: []Pane{leaf, {ID: "other"}}},
+	} {
+		p.Windows[0].Layout = &node
+		if err := p.Validate(); err == nil {
+			t.Fatalf("accepted invalid layout: %+v", node)
+		}
+	}
+	p.Windows[0].Layout = &valid
+	p.Windows[0].Command = "ignored"
+	if p.Validate() == nil {
+		t.Fatal("accepted ambiguous window command")
+	}
+}

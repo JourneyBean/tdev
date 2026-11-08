@@ -387,6 +387,10 @@ func (a *app) windowWizard(ctx context.Context, w config.Window) (config.Window,
 	if err != nil {
 		return w, err
 	}
+	if w.Layout != nil {
+		fmt.Fprintln(a.errOut, "保留已有分屏布局；各 pane 的目录和命令可通过 edit --stdin 修改。")
+		return w, nil
+	}
 	w.Command, err = a.prompt(ctx, "启动命令（- 清空，空命令进入 shell）", w.Command)
 	if w.Command == "-" {
 		w.Command = ""

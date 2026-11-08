@@ -108,6 +108,18 @@ func (a *app) calls(ctx context.Context, t target, input []byte, operations ...[
 	// by the gate and reported with their program version, without running a write.
 	script := remoteCommand(t, "--json", "version") + "; tdev_rc=$?; printf '\\n" + marker + " %s\\n' \"$tdev_rc\"; test \"$tdev_rc\" -eq 0 || exit \"$tdev_rc\"; "
 	gate := []string{"--json", "api", "version", "--require", "api-v1"}
+	// Gate layout-bearing writes before an older server consumes their stdin.
+	if len(input) > 0 {
+		var p config.Project
+		if json.Unmarshal(input, &p) == nil {
+			for _, w := range p.Windows {
+				if w.Layout != nil {
+					gate = append(gate, "--require", "pane-layout-v1")
+					break
+				}
+			}
+		}
+	}
 	seen := map[string]bool{"api-v1": true}
 	for _, args := range operations {
 		cap := apiCapability(args)
