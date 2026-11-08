@@ -163,3 +163,9 @@ jobs:
           gh release create "$RELEASE_TAG" "${assets[@]}" --verify-tag --draft \
             --title "tdev $RELEASE_TAG" --notes-file "docs/releases/$RELEASE_TAG.md"
           gh release edit "$RELEASE_TAG" --draft=false --latest
+
+  verify-public-downloads:
+    needs: release
+    uses: ./.github/workflows/verify-release.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}

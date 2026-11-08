@@ -43,4 +43,6 @@ v0.3.0 的终端测试夹具通过 Go test overlay 读取 workflow 提交中的 
 
 先创建草稿并上传全部文件，成功后才公开 Release 并更新 latest。已存在的 Release 保持原样；同一标签的并发运行串行执行。上传失败可能留下草稿，需要先检查草稿及产物，处理后再运行；流水线不自动覆盖发布文件或删除 Release。
 
+公开后调用 `verify-release.yml`，从匿名版本下载地址读取全部 14 个附件，验证公钥、签名、摘要、压缩包内容，并在临时目录在线安装 Linux amd64 版本。已有 Release 可单独手动运行 Verify public release，输入标签后验证下载，无需重新构建或覆盖产物。
+
 安装脚本内置当前 GitHub 仓库的版本下载地址和 latest 升级地址，继续支持 README 中的 GitHub 安装方式。GitLab 发布流程独立保留。

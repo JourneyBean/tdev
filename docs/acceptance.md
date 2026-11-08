@@ -14,6 +14,8 @@ Last verified: 2026-11-08。源码版本：0.3.0。下表保留集成验收使�
 
 Bookworm 云端运行通过 SSH、CJK 与连续断线测试后，本机 scratch 用例仍因标记与换行之间的 ANSI 清行序列失败。文本匹配增加 ANSI 规范化，回归覆盖清行序列、Unicode、命令回显拒绝，以及 OSC 标题原始字节保留与缺失拒绝。v0.3.0 补发使用仅替换该测试文件的 Go overlay，原标签生产源码保持不变。
 
+2026-11-08：修复后的 main CI 与 v0.3.0 补发均在 GitHub 成功，补发 CLI 完整竞态集成约 156 秒。v0.3.0 已公开并成为 latest。匿名资产 API 下载的 14 个附件通过独立公钥、Ed25519 签名、manifest、SHA256SUMS 和四平台压缩包内容校验；macOS arm64 与 Linux amd64 的隔离签名安装均返回 0.3.0。常规下载地址验收遇到 GitHub 边缘节点 504，新增公开下载验证 workflow 用于云端在线重验。Linux arm64 与 macOS amd64 产物完成交叉构建及文件校验。
+
 ## v0.3.0 版本验收
 
 2026-11-08：默认构建、源码及发布说明统一为 0.3.0。完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 179 秒，包含真实隔离 SSH/tmux 分屏、保存恢复及诊断回归。`make check`、`make cross`、`make build` 通过；最终二进制 JSON version 返回 0.3.0、pane-layout-v1，协议及 schema 均为 1。四平台二进制格式及架构校验通过，新增内容、文件名与构建路径扫描未发现凭据或内部环境标识。原生执行环境为 Linux；macOS 原生交互、实际 FUSE 挂载及极小终端尺寸下布局恢复待对应环境验证。

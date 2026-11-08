@@ -1,0 +1,62 @@
+name: Verify public release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Validate tag
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - name: Verify anonymous public downloads and installation
+        env:
+          RELEASE_BASE: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          verify_dir=$(mktemp -d "$RUNNER_TEMP/tdev-public-verify.XXXXXX")
+          trap 'rm -rf -- "$verify_dir"' EXIT
+          assets=(manifest.json manifest.sig SHA256SUMS SHA256SUMS.sig release.pub install.sh)
+          for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+            assets+=("tdev-$platform" "tdev-$platform.tar.gz")
+          done
+          for asset in "${assets[@]}"; do
+            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+              --retry 3 --connect-timeout 15 --max-time 90 --max-filesize 268435456 \
+              "$RELEASE_BASE/$asset" -o "$verify_dir/$asset"
+          done
+          cmp docs/release.pub "$verify_dir/release.pub"
+          openssl pkeyutl -verify -pubin -inkey docs/release.pub -rawin \
+            -in "$verify_dir/manifest.json" -sigfile "$verify_dir/manifest.sig"
+          openssl pkeyutl -verify -pubin -inkey docs/release.pub -rawin \
+            -in "$verify_dir/SHA256SUMS" -sigfile "$verify_dir/SHA256SUMS.sig"
+          (cd "$verify_dir" && sha256sum --check --strict SHA256SUMS)
+          for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+            cmp "$verify_dir/tdev-$platform" <(tar -xOzf "$verify_dir/tdev-$platform.tar.gz" tdev)
+          done
+          sh -n "$verify_dir/install.sh"
+          sh "$verify_dir/install.sh" --destination "$verify_dir/bin/tdev" \
+            --config-dir "$verify_dir/config" --no-modify-path --no-completion
+          "$verify_dir/bin/tdev" --json version | tee "$verify_dir/version.json"
+          jq -e --arg version "${RELEASE_TAG#v}" '.ok == true and .data.version == $version' "$verify_dir/version.json"
