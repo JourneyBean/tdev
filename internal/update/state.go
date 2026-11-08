@@ -59,6 +59,7 @@ func migrateInstallation(store config.Store, destination string) error {
 			return current, VerifyError("backup digest mismatch")
 		}
 		next := old
+		preserveLegacy := false
 		if !managed {
 			next = filepath.Join(backupDir, fmt.Sprintf("tdev.backup-legacy-%x", sha256.Sum256([]byte(old))))
 		}
@@ -71,27 +72,41 @@ func migrateInstallation(store config.Store, destination string) error {
 				return current, err
 			}
 			var prior Receipt
-			if json.Unmarshal(data, &prior) != nil || prior.Destination != destination || prior.SHA256 != hash {
+			if json.Unmarshal(data, &prior) != nil || prior.Destination != destination {
 				return current, VerifyError("previous receipt does not match backup")
 			}
-			prior, err = migrate(prior, depth+1)
-			if err != nil {
-				return current, err
+			if prior.SHA256 != hash {
+				if managed {
+					return current, VerifyError("previous receipt does not match backup")
+				}
+				// Older installers copied stale receipts after external binary
+				// replacements. The parent digest still verifies this backup,
+				// but its receipt cannot describe it or authorize older history.
+				// Leave the original pair untouched for manual inspection.
+				preserveLegacy = true
+				current.PreviousReceipt = ""
+			} else {
+				prior, err = migrate(prior, depth+1)
+				if err != nil {
+					return current, err
+				}
+				encoded, _ := json.MarshalIndent(prior, "", "  ")
+				if err = writeStateFile(next+".json", encoded, 0600); err != nil {
+					return current, err
+				}
+				if !managed {
+					removed[current.PreviousReceipt] = true
+				}
+				current.PreviousReceipt = next + ".json"
 			}
-			encoded, _ := json.MarshalIndent(prior, "", "  ")
-			if err = writeStateFile(next+".json", encoded, 0600); err != nil {
-				return current, err
-			}
-			if !managed {
-				removed[current.PreviousReceipt] = true
-			}
-			current.PreviousReceipt = next + ".json"
 		}
 		if !managed {
 			if err = writeStateFile(next, data, 0700); err != nil {
 				return current, err
 			}
-			removed[old] = true
+			if !preserveLegacy {
+				removed[old] = true
+			}
 		}
 		current.PreviousPath = next
 		return current, nil

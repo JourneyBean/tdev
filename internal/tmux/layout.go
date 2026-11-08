@@ -36,28 +36,24 @@ func (m Manager) startPane(ctx context.Context, pane, id, directory, command str
 	if _, err := m.run(ctx, "set-option", "-p", "-t", pane, "@tdev_pane_id", id); err != nil {
 		return err
 	}
+	// Let tmux open its normal interactive shell in the pane directory.
+	if _, err := m.run(ctx, "respawn-pane", "-k", "-t", pane, "-c", directory); err != nil {
+		return err
+	}
 	if command == "" {
 		return nil
 	}
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
+	// Queue literal input so shell initialization completes before execution.
+	if _, err := m.run(ctx, "send-keys", "-t", pane, "-l", "--", command); err != nil {
+		return err
 	}
-	_, err := m.run(ctx, "respawn-pane", "-k", "-t", pane, "-c", directory, Quote(shell)+" -lc "+Quote(command))
+	_, err := m.run(ctx, "send-keys", "-t", pane, "Enter")
 	return err
 }
 
 func (m Manager) restoreLayout(ctx context.Context, p config.Project, pane string, node config.Pane) error {
 	if node.Split == "" {
-		if err := m.startPane(ctx, pane, node.ID, panePath(p, node.Directory), node.Command); err != nil {
-			return err
-		}
-		if node.Command == "" {
-			// Shell-only leaves may have a different cwd from the initial window.
-			_, err := m.run(ctx, "respawn-pane", "-k", "-t", pane, "-c", panePath(p, node.Directory))
-			return err
-		}
-		return nil
+		return m.startPane(ctx, pane, node.ID, panePath(p, node.Directory), node.Command)
 	}
 	direction := "-h"
 	if node.Split == "vertical" {

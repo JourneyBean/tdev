@@ -11,7 +11,7 @@ import (
 func TestListingTableAlignsTerminalColumns(t *testing.T) {
 	rows := [][6]string{
 		{"dev", "中文项目", "project", "unmanaged,warning", "/projects/中文目录", "127.0.0.1:8080 -> 127.0.0.1:80"},
-		{"dev", "demo", "project", "missing", "/projects/demo", "—"},
+		{"dev", "demo", "project", "inactive", "/projects/demo", "—"},
 		{"dev", "debug", "scratch", "running", "/projects/debug", "—"},
 	}
 	var out strings.Builder

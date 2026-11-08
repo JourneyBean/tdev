@@ -167,7 +167,7 @@ func TestListProjectsAcrossServers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err, string(output))
 	}
-	for _, text := range []string{"SERVER NAME TYPE STATUS DIR FORWARDS", "empty — — synced —", "populated demo project missing"} {
+	for _, text := range []string{"SERVER NAME TYPE STATUS DIR FORWARDS", "empty — — synced —", "populated demo project inactive"} {
 		if !strings.Contains(strings.Join(strings.Fields(string(output)), " "), text) {
 			t.Fatalf("human listing missing %q: %s", text, output)
 		}

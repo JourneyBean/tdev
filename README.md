@@ -4,10 +4,10 @@
 选择已有连接或填写服务器地址，读取目标设备的项目配置，随后打开项目继续开发。
 复用系统 OpenSSH 和 tmux，远端无需数据库、HTTP API 或常驻 tdev 服务。
 
-当前源码版本为 `0.4.0`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
+当前源码版本为 `0.4.1`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
 挂载、签名安装升级和回滚。设计基线见[产品与技术设计](docs/design.md)，实现取舍见
 [开发记录](docs/development.md)，实际通过与尚未实测的场景见[第一版验收记录](docs/acceptance.md)。
-版本变更见[发布说明](docs/releases/v0.4.0.md)。二进制 Release 位于
+版本变更见[发布说明](docs/releases/v0.4.1.md)。二进制 Release 位于
 [GitHub](https://github.com/JourneyBean/tdev/releases)。
 
 ## 安装

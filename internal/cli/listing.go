@@ -214,6 +214,9 @@ func (listing projectListing) print(out io.Writer) error {
 		}
 		for _, project := range entry.Projects {
 			status := project.Session.Status
+			if status == "missing" {
+				status = "inactive"
+			}
 			if project.Session.Warning != "" || project.OverrideError != "" {
 				status += ",warning"
 				hasWarnings = true

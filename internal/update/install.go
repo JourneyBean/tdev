@@ -198,9 +198,17 @@ func Install(ctx context.Context, store config.Store, b Bundle, destination stri
 			oldHash := sha256.Sum256(old)
 			r.PreviousSHA256 = hex.EncodeToString(oldHash[:])
 			if prior, err := os.ReadFile(ReceiptPath(destination)); err == nil {
-				r.PreviousReceipt = r.PreviousPath + ".json"
-				if err = config.AtomicWrite(r.PreviousReceipt, prior, 0600); err != nil {
-					return r, err
+				var p Receipt
+				if json.Unmarshal(prior, &p) != nil || p.Destination != destination {
+					return r, VerifyError("invalid previous installation receipt")
+				}
+				// An externally replaced binary is a valid rollback snapshot,
+				// but its stale receipt must not become part of the new chain.
+				if p.SHA256 == r.PreviousSHA256 {
+					r.PreviousReceipt = r.PreviousPath + ".json"
+					if err = config.AtomicWrite(r.PreviousReceipt, prior, 0600); err != nil {
+						return r, err
+					}
 				}
 			} else if !os.IsNotExist(err) {
 				return r, err

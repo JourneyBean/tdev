@@ -1,8 +1,16 @@
 # 开发验收记录
 
-Last verified: 2026-11-08。源码版本：0.4.0。下表保留集成验收使用的开发版版本号。
+Last verified: 2026-11-08。源码版本：0.4.1。下表保留集成验收使用的开发版版本号。
 
 本记录汇总第一版核心功能的自动化验证、环境实测和待验证项。
+
+2026-11-08：`ls` 文本输出将尚未启动或已停止的项目状态显示为 `inactive`，JSON 与缓存沿用 `missing`。完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成用时 128.087 秒、真实隔离 tmux 测试用时 3.998 秒；跨服务器列表集成验证新文案。`make check` 与 `make build` 通过。执行环境为 Linux，本次仅调整列表展示。
+
+## v0.4.1 版本验收
+
+2026-11-08：默认构建、源码版本与发布说明统一为 0.4.1。`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，真实隔离 SSH/PTY 的 CLI 集成用时 134.853 秒、tmux 用时 6.573 秒、安装升级测试用时 8.102 秒，覆盖交互 shell 启动与继续输入、分屏、过期收据迁移和回滚、跨服务器列表文案及连续断线重连。`make check`、`make cross` 和 `make build` 通过；Linux amd64 构建的 JSON version 返回 0.4.1，协议及 schema 均为 1。公开文件与文件名扫描未发现凭据或内部环境标识。
+
+原生执行环境为 Linux amd64、Go 1.27.3、tmux 3.6；Linux/macOS amd64/arm64 四平台交叉构建通过。macOS 原生 shell、实际 nvm 配置、真实跨文件系统迁移与中断恢复等人工验收限制继续适用，见“尚未完成的环境或人工验收”。
 
 ## GitHub CI 与发布验收
 
@@ -270,3 +278,15 @@ Go 1.27.3、Linux amd64、tmux 3.6 环境下，`TDEV_REQUIRE_INTEGRATION=1 go te
 `make check` 通过，包含 `go vet ./...`、`gofmt -l cmd internal`、`git diff --check` 和安装及 GitLab 构建脚本语法检查。`make cross` 完成 Linux/macOS 的 amd64/arm64 四平台构建，Go 构建信息与目标平台一致；Linux amd64 产物的 JSON version 返回 0.3.0，协议及配置 schema 均为 1。本轮保留现有源码版本，发布时需同步版本与发布说明。
 
 本轮完整测试通过，此前断线重连与 detach 退出的偶发失败仍保留为时序敏感性记录。macOS 原生交互、真实跨文件系统状态迁移及中断恢复、历史发行版回退后使用新版安装脚本重新升级等覆盖限制，见“尚未完成的环境或人工验收”。
+
+## 旧备份过期收据修复（2026-11-09）
+
+回归测试覆盖旧相邻目录和配置目录的过期 receipt，分别执行重复安装、新版升级和直接回滚。校验通过的备份仍可恢复，过期 receipt 的链在边界截断，原始备份、receipt 和更早历史字节保持。负向用例覆盖格式错误、错误安装目标、备份哈希损坏及新状态目录中不匹配的 receipt，均拒绝操作并保留原文件。另行验证外部替换二进制后升级，新备份仅保存实际字节，回滚可恢复该快照。
+
+Go 1.27.3、Linux amd64 下 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，真实隔离 SSH/PTY 集成用时 122.604 秒，tmux 用时 4.207 秒，update 用时 7.847 秒。`make check` 和 Linux/macOS amd64/arm64 四平台 `make cross` 通过。测试使用临时安装目标和配置；现有环境与人工验收边界继续适用。
+
+## 交互 shell 启动命令（2026-11-09）
+
+pane 启动普通 tmux shell，通过 literal `send-keys` 和独立 Enter 执行声明命令。隔离 tmux 回归覆盖单窗口与分屏、交互初始化中定义的工具、延迟初始化、引号和 shell 元字符原样传递、命令结束后继续使用 shell。布局测试同时核对实际文件写入及 pane 退出状态，避免把输入回显当作命令完成。
+
+Go 1.27.3、Linux amd64、tmux 3.6 下最终 `TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 300s ./...` 全部通过，隔离 SSH/PTY 集成用时 125.013 秒，tmux 用时 6.856 秒。`make check`、四平台 `make cross` 和 `make build` 通过。验证使用私有配置与 socket；macOS 原生 shell 和用户实际 nvm 配置的人工体验仍待验证。

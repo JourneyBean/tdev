@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,71 @@ import (
 
 	"tdev/internal/config"
 )
+
+func TestStartupCommandUsesInteractiveShell(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("interactive startup test requires bash")
+	}
+	for _, layout := range []bool{false, true} {
+		t.Run(map[bool]string{false: "window", true: "layout"}[layout], func(t *testing.T) {
+			m, p, ctx := fixture(t)
+			rc := filepath.Join(t.TempDir(), "bashrc")
+			// Model tools initialized only by interactive shell configuration.
+			if err := os.WriteFile(rc, []byte("case $- in *i*) ;; *) return ;; esac\nsleep 0.1\ntdev_tool() { printf '%s\\n' \"$1\"; }\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.run(ctx, "new-session", "-d", "-s", "bootstrap"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.run(ctx, "set-option", "-g", "default-shell", bash); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.run(ctx, "set-option", "-g", "default-command", "exec "+Quote(bash)+" --noprofile --rcfile "+Quote(rc)+" -i"); err != nil {
+				t.Fatal(err)
+			}
+			output := filepath.Join(p.Directory, "startup result")
+			want := "quotes ' and \" and $HOME; literal\n"
+			command := "tdev_tool " + Quote(strings.TrimSuffix(want, "\n")) + " > " + Quote(output)
+			if layout {
+				p.Windows[0].Layout = &config.Pane{Split: "vertical", Panes: []config.Pane{{ID: "tool", Directory: ".", Command: command}, {ID: "shell", Directory: "."}}}
+			} else {
+				p.Windows[0].Command = command
+			}
+			s, err := m.Ensure(ctx, p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitFor := func(want string) {
+				t.Helper()
+				deadline := time.Now().Add(3 * time.Second)
+				for {
+					b, _ := os.ReadFile(output)
+					if string(b) == want {
+						return
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("interactive command output: %q, want %q", b, want)
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}
+			waitFor(want)
+			windows, err := m.Windows(ctx, s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pane := windows[0].Leaves[0].PaneID
+			if _, err := m.run(ctx, "send-keys", "-t", pane, "-l", "--", "tdev_tool continued >> "+Quote(output)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.run(ctx, "send-keys", "-t", pane, "Enter"); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(want + "continued\n")
+		})
+	}
+}
 
 func TestNestedLayoutSaveRestore(t *testing.T) {
 	m, p, ctx := fixture(t)
@@ -43,7 +109,12 @@ func TestNestedLayoutSaveRestore(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(output, "BACKEND_READY") {
+		dead, err := m.run(ctx, "display-message", "-p", "-t", windows[0].Leaves[1].PaneID, "#{pane_dead}:#{pane_dead_status}")
+		if err != nil {
+			t.Fatal(err)
+		}
+		starts, _ := os.ReadFile(counter)
+		if strings.Contains(output, "BACKEND_READY") && dead == "1:7" && string(starts) == "x" {
 			break
 		}
 		if time.Now().After(deadline) {
