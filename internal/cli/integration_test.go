@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 	"go.yaml.in/yaml/v3"
 	"tdev/internal/config"
@@ -144,13 +145,35 @@ func (p *terminalProcess) waitText(t *testing.T, text string) {
 	t.Helper()
 	deadline := time.Now().Add(12 * time.Second)
 	for {
-		if strings.Contains(p.output.String(), text) {
+		if terminalContains(p.output.String(), text) {
 			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("terminal missing %q: %q", text, p.output.String())
 		}
 		time.Sleep(15 * time.Millisecond)
+	}
+}
+func terminalContains(output, text string) bool {
+	return strings.Contains(output, text) || (!strings.Contains(text, "\x1b") && strings.Contains(ansi.Strip(output), text))
+}
+
+func TestTerminalContains(t *testing.T) {
+	for _, test := range []struct {
+		name, output, text string
+		want               bool
+	}{
+		{"clear line", "READY\x1b[K\r\n", "READY\r\n", true},
+		{"unicode", "中文🙂\x1b[K\r\n", "中文🙂\r\n", true},
+		{"command echo", "printf 'READY\\n'\r\n", "READY\r\n", false},
+		{"raw title", "\x1b]2;tdev: fixture/demo\x07", "\x1b]2;tdev: fixture/demo\x07", true},
+		{"missing title", "READY\r\n", "\x1b]2;tdev: fixture/demo\x07", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := terminalContains(test.output, test.text); got != test.want {
+				t.Fatalf("terminalContains = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 func (p *terminalProcess) exit(t *testing.T, want int) {

@@ -35,6 +35,8 @@ gh workflow run release.yml --repo JourneyBean/tdev --ref main -f tag=v0.3.0
 
 手动运行从已有标签检出源码、执行测试，并按测试记录的提交 SHA 构建。目标标签无需移动。若通过 GITHUB_TOKEN 推送标签，使用 workflow_dispatch 显式触发发布；该 token 产生的普通 push 事件受 [GitHub 防递归规则](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow)限制。
 
+v0.3.0 的终端测试夹具通过 Go test overlay 读取 workflow 提交中的 ANSI 兼容断言；原标签文件与生产构建源码保持原样。
+
 ## 产物与重试
 
 发布前验证 manifest 和 SHA256SUMS 的 Ed25519 签名、四平台二进制及压缩包摘要、可信公钥和安装脚本语法。固定上传 14 个文件：四个平台各一个二进制和 tar.gz，加上 manifest.json、manifest.sig、SHA256SUMS、SHA256SUMS.sig、release.pub、install.sh。临时签名文件不在上传名单内。

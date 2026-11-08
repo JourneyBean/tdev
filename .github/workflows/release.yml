@@ -66,6 +66,15 @@ jobs:
           fi
           test -s "docs/releases/$RELEASE_TAG.md"
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - name: Read compatible terminal fixture for v0.3.0
+        if: github.event_name == 'workflow_dispatch' && inputs.tag == 'v0.3.0'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-tests
+          sparse-checkout: internal/cli/integration_test.go
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -82,8 +91,13 @@ jobs:
         env:
           TDEV_REQUIRE_INTEGRATION: '1'
         run: |
+          test_flags=()
+          if [[ -f .ci-tests/internal/cli/integration_test.go ]]; then
+            printf '{"Replace":{"%s/internal/cli/integration_test.go":"%s/.ci-tests/internal/cli/integration_test.go"}}\n' "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" > .ci-tests/overlay.json
+            test_flags=(-overlay="$GITHUB_WORKSPACE/.ci-tests/overlay.json")
+          fi
           runuser -u developer -- env PATH="$PATH" GOCACHE=/tmp/tdev-go-build GOMODCACHE=/tmp/tdev-go-mod make check
-          runuser -u developer -- env PATH="$PATH" GOCACHE=/tmp/tdev-go-build GOMODCACHE=/tmp/tdev-go-mod TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...
+          runuser -u developer -- env PATH="$PATH" GOCACHE=/tmp/tdev-go-build GOMODCACHE=/tmp/tdev-go-mod TDEV_REQUIRE_INTEGRATION=1 go test "${test_flags[@]}" -race -count=1 -timeout 240s ./...
 
   release:
     needs: test
