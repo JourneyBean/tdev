@@ -1,0 +1,140 @@
+name: GitHub CI and Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable version tag to publish (for example v0.3.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      commit: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: Validate release tag
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if ! [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo 'Release tag must be vMAJOR.MINOR.PATCH.' >&2
+            exit 2
+          fi
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          persist-credentials: false
+      - name: Record tested commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Check release version and notes
+        id: version
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          version=${RELEASE_TAG#v}
+          make_version=$(awk '$1 == "VERSION" && $2 == "?=" { print $3 }' Makefile)
+          source_version=$(sed -n 's/^var Version = "\([^"]*\)"$/\1/p' internal/cli/cli.go)
+          if [[ "$version" != "$make_version" || "$version" != "$source_version" ]]; then
+            echo 'Tag, Makefile and source versions must agree.' >&2
+            exit 2
+          fi
+          test -s "docs/releases/$RELEASE_TAG.md"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Install integration dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends tmux openssh-server openssh-client openssl zsh
+          sudo install -d -m 0755 /run/sshd
+      - name: Check and test
+        env:
+          TDEV_REQUIRE_INTEGRATION: '1'
+        run: |
+          make check
+          go test -race -count=1 -timeout 240s ./...
+
+  release:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.test.outputs.tag }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.test.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Build and sign all platforms
+        env:
+          TDEV_SIGNING_KEY_PEM: ${{ secrets.TDEV_SIGNING_KEY }}
+        run: |
+          set +x
+          set -euo pipefail
+          umask 077
+          if [[ "${RUNNER_DEBUG:-0}" == 1 ]]; then
+            echo 'Disable Actions debug logging for signed builds.' >&2
+            exit 2
+          fi
+          if [[ -z "$TDEV_SIGNING_KEY_PEM" ]]; then
+            echo 'Configure the TDEV_SIGNING_KEY Actions secret with the existing PKCS8 Ed25519 private key.' >&2
+            exit 2
+          fi
+          signing_dir=$(mktemp -d "$RUNNER_TEMP/tdev-signing.XXXXXX")
+          trap 'rm -rf -- "$signing_dir"' EXIT
+          printf '%s\n' "$TDEV_SIGNING_KEY_PEM" > "$signing_dir/release.pem"
+          unset TDEV_SIGNING_KEY_PEM
+          openssl pkey -in "$signing_dir/release.pem" -pubout -out "$signing_dir/release.pub" 2>/dev/null
+          if ! cmp -s "$signing_dir/release.pub" docs/release.pub; then
+            echo 'Signing key differs from docs/release.pub.' >&2
+            exit 2
+          fi
+          export TDEV_RELEASE_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
+          export TDEV_UPGRADE_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/latest/download"
+          TDEV_SIGNING_KEY="$signing_dir/release.pem" make release VERSION="${RELEASE_TAG#v}"
+      - name: Verify signed artifacts
+        run: |
+          cmp docs/release.pub dist/release.pub
+          openssl pkeyutl -verify -pubin -inkey docs/release.pub -rawin -in dist/manifest.json -sigfile dist/manifest.sig
+          openssl pkeyutl -verify -pubin -inkey docs/release.pub -rawin -in dist/SHA256SUMS -sigfile dist/SHA256SUMS.sig
+          (cd dist && sha256sum --check --strict SHA256SUMS)
+          sh -n dist/install.sh
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          assets=(dist/manifest.json dist/manifest.sig dist/SHA256SUMS dist/SHA256SUMS.sig dist/release.pub dist/install.sh)
+          for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+            assets+=("dist/tdev-$platform" "dist/tdev-$platform.tar.gz")
+          done
+          for asset in "${assets[@]}"; do test -s "$asset"; done
+          gh release create "$RELEASE_TAG" "${assets[@]}" --verify-tag --draft \
+            --title "tdev $RELEASE_TAG" --notes-file "docs/releases/$RELEASE_TAG.md"
+          gh release edit "$RELEASE_TAG" --draft=false --latest

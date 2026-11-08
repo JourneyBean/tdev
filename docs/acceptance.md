@@ -4,6 +4,12 @@ Last verified: 2026-11-08。源码版本：0.3.0。下表保留集成验收使�
 
 本记录汇总第一版核心功能的自动化验证、环境实测和待验证项。
 
+## GitHub CI 与发布验收
+
+2026-11-08：GitHub workflow 通过 actionlint v1.7.12 校验。临时夹具的 14 个用例覆盖稳定标签格式、前导零及注入字符串拒绝、源码版本一致性、缺失及错误签名密钥、调试日志限制、临时密钥清理、GitHub 下载及升级来源，以及上传失败时保持草稿状态；测试密钥均在临时目录生成并清理。
+
+完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 123 秒，包含真实隔离 SSH/tmux；`make check` 通过。原生执行环境为 Linux。GitHub 托管 Runner 执行、实际签名 Secret 接入及在线 Release 上传仍待云端验证；上传步骤的本地夹具使用模拟 gh，不涉及真实发布。
+
 ## v0.3.0 版本验收
 
 2026-11-08：默认构建、源码及发布说明统一为 0.3.0。完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 179 秒，包含真实隔离 SSH/tmux 分屏、保存恢复及诊断回归。`make check`、`make cross`、`make build` 通过；最终二进制 JSON version 返回 0.3.0、pane-layout-v1，协议及 schema 均为 1。四平台二进制格式及架构校验通过，新增内容、文件名与构建路径扫描未发现凭据或内部环境标识。原生执行环境为 Linux；macOS 原生交互、实际 FUSE 挂载及极小终端尺寸下布局恢复待对应环境验证。

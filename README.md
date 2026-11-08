@@ -312,6 +312,8 @@ Mac 挂载按 NFC 远端文件名工作，混合 NFC/NFD 名称仍受 SSHFS/macF
 
 ## 安装、升级和回滚
 
+GitHub 自动发布见 [GitHub Actions 发布配置](docs/github-release.md)，支持版本标签触发和补发已有标签。
+
 GitLab 自动发布见 [GitLab CI 发布配置](docs/gitlab-release.md)。配置签名文件变量和受保护的 `v*` tag 后，推送版本 tag 即可运行测试、构建四平台签名包并创建 GitLab Release。GitLab 安装脚本会保存当前项目作为后续升级来源。
 
 构建机器可以用既有外部 PKCS8 Ed25519 密钥生成四平台二进制、压缩包、签名清单和校验表：
