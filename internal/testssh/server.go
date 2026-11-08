@@ -67,7 +67,7 @@ func Start(t *testing.T) *Server {
 	if e != nil {
 		t.Fatal(e)
 	}
-	text := fmt.Sprintf("Port %d\nListenAddress 127.0.0.1\nHostKey %s/host\nPidFile %s/pid\nAuthorizedKeysFile %s/client.pub\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nAllowUsers %s\nAllowTcpForwarding yes\nGatewayPorts no\nSubsystem sftp /usr/lib/openssh/sftp-server\nLogLevel VERBOSE\nSetEnv TDEV_TMUX_SOCKET=tdev-sshd-%d\n", port, dir, dir, dir, u.Username, port)
+	text := fmt.Sprintf("Port %d\nListenAddress 127.0.0.1\nHostKey %s/host\nPidFile %s/pid\nAuthorizedKeysFile %s/client.pub\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nAllowUsers %s\nAllowTcpForwarding yes\nGatewayPorts no\nSubsystem sftp /usr/lib/openssh/sftp-server\nLogLevel VERBOSE\nSetEnv TDEV_TMUX_SOCKET=tdev-sshd-%d XDG_STATE_HOME=%s/state\n", port, dir, dir, dir, u.Username, port, dir)
 	sshdConfig := filepath.Join(dir, "sshd_config")
 	if e = os.WriteFile(sshdConfig, []byte(text), 0600); e != nil {
 		t.Fatal(e)

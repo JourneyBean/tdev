@@ -134,7 +134,7 @@ func TestProjectOperationsDoNotQuerySessionStatus(t *testing.T) {
 			t.Fatal(err)
 		}
 		executeBinary(t, binary, root, s.Config, "", 0, "sh", "demo", "--name", "debug")
-		windows, err := exec.Command("tmux", manager.Args("list-windows", "-t", "=demo", "-F", "#{window_name}")...).CombinedOutput()
+		windows, err := exec.Command("tmux", manager.Args("list-windows", "-t", "="+tmux.SessionName(project), "-F", "#{window_name}")...).CombinedOutput()
 		if err != nil || !strings.Contains(string(windows), "debug") {
 			t.Fatalf("shell window: %v %s", err, windows)
 		}

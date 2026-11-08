@@ -13,7 +13,6 @@ func TestListingTableAlignsTerminalColumns(t *testing.T) {
 		{"dev", "中文项目", "project", "unmanaged,warning", "/projects/中文目录", "127.0.0.1:8080 -> 127.0.0.1:80"},
 		{"dev", "demo", "project", "missing", "/projects/demo", "—"},
 		{"dev", "debug", "scratch", "running", "/projects/debug", "—"},
-		{"", "", "", "", "恢复：tdev open dev/debug", ""},
 	}
 	var out strings.Builder
 	if err := printListingTable(&out, rows); err != nil {
@@ -24,7 +23,7 @@ func TestListingTableAlignsTerminalColumns(t *testing.T) {
 		t.Fatalf("unexpected table: %q", out.String())
 	}
 	// Each column starts at the same display cell, including rows with Chinese names.
-	starts := [6]int{2, 10, 20, 29, 48, 75}
+	starts := [6]int{2, 10, 20, 29, 48, 68}
 	for i, row := range append([][6]string{{"SERVER", "NAME", "TYPE", "STATUS", "DIR", "FORWARDS"}}, rows...) {
 		line := lines[0]
 		if i > 0 {

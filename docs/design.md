@@ -79,7 +79,7 @@ tdev 是通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量�
 
 ls 默认查询本机和全部已配置远端，--server 限定范围，--all 与默认行为一致。终端先显示系统临时目录中的私有缓存和 syncing，再并发更新为 synced；会话名称或归属 warning 随项目展示，刷新成功。失败保留缓存和时间；连接失败显示 unreachable，旧 API 显示 upgrade-required，服务器应用错误显示 error。成功空结果清空对应快照。非终端与 JSON 返回一次最终结果；部分失败返回 9，error.details 保留各服务器结果。缓存仅供展示和发现，实际操作读取目标机器最新定义。
 
-项目名称建议约束为 `[A-Za-z0-9][A-Za-z0-9_-]*`，长度 1–64；禁止斜杠、点路径和控制字符。项目拥有独立稳定 UUID，显示名称可以与内部 session 名分离。tmux session 优先使用项目名称，稳定 UUID 存于 tmux 标记。状态查询按 UUID 查找，包括旧版或手工改名的会话；名称差异显示 warning。同名普通会话显示 unmanaged 和 warning，open 保留该会话并创建独立的 tdev-<UUID> 托管会话。多个会话具有同一项目 UUID 时，状态查询返回 warning，接管或停止操作需先确认归属。
+项目名称建议约束为 `[A-Za-z0-9][A-Za-z0-9_-]*`，长度 1–64；禁止斜杠、点路径和控制字符。项目拥有独立稳定 UUID，显示名称可以与内部 session 名分离。新建 tmux session 使用 `tdev-project-<name>`，稳定 UUID 存于 tmux 标记。状态查询按 UUID 查找，包括旧版或手工改名的会话；名称差异显示 warning。普通会话使用项目逻辑名称时与项目独立。`tdev-project-<name>` 被无匹配 UUID 的会话占用时显示 unmanaged 和 warning，open 保留该会话并创建独立的 `tdev-project-<UUID>` 托管会话（UUID 去掉连字符）。多个会话具有同一项目 UUID 时，状态查询返回 warning，接管或停止操作需先确认归属。
 
 ### 3.2 tmux 标记
 
@@ -556,6 +556,6 @@ GoReleaser 可负责产物组织和发布；安装器、签名验证、远端部
 
 `tdev scratch [server]` 创建并进入独立 tmux session。`local` 为本机，其他目标取自客户端登记的服务器。省略目标且仅有本机可用时直接使用本机，否则显示服务器选择器。`--name` 设置逻辑名称，默认生成唯一名称；`--dir` 设置目标机器上的绝对路径或 home 相对路径，默认 home。重名创建返回 SESSION_CONFLICT。JSON 调用创建会话并返回身份，不附着终端。恢复统一使用 `tdev open <name>` 或 `tdev open <server>/<name>`。open 按本机、缓存索引、实时远端查询定位目标，选择目标后重新验证实际会话。项目与 scratch 在同一服务器同名时返回 SESSION_CONFLICT；缓存中已结束的 scratch 返回 SESSION_NOT_FOUND；完全未知的名称沿用项目创建向导。scratch 的 open 直接附着，`--mount` 仅适用于项目。
 
-临时会话使用独立 tmux 归属标记与 `tdev-scratch-` 名称前缀，独立于项目定义、启动配置、转发及 save。detach 和传输断线保留运行进程，最后一个窗口退出时结束。重连只进入匹配原 session ID 与 generation 的会话。
+临时会话使用独立 tmux 归属标记，实际名称为 `tdev-scratch-<name>`；未指定名称时以自动生成的 UUID 作为名称，形成 `tdev-scratch-<UUID>`。临时会话独立于项目定义、启动配置、转发及 save。detach 和传输断线保留运行进程，最后一个窗口退出时结束。重连只进入匹配原 session ID 与 generation 的会话。
 
 `ls` 默认展示项目和 scratch，支持 `--type project|scratch` 与现有 `--server` 筛选。scratch 从实际 tmux 标记发现，跟随列表缓存和离线状态展示；成功刷新后移除已结束的会话。JSON 保留 projects 数组，并增加 scratches 数组。机器接口 `api scratch create|list|status|attach|attachment` 使用 `scratch-v1` 能力门禁，旧服务器保留项目列表并给出 scratch 升级提示。

@@ -47,7 +47,7 @@ func TestLocalProjectsAndNamedShell(t *testing.T) {
 	}
 	m := tmux.Manager{Store: store, Socket: socket}
 	status, err := m.Status(context.Background(), p)
-	if err != nil || status.SessionName != "demo" {
+	if err != nil || status.SessionName != "tdev-project-demo" {
 		t.Fatal(status, err)
 	}
 	code, r = run(t, root, "", "sh", "demo", "--name", "debug", "--save")

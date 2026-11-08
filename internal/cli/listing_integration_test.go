@@ -189,7 +189,7 @@ func TestListProjectsAcrossServers(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, manager := range []tmux.Manager{local, remote} {
-			if out, err := exec.Command("tmux", manager.Args("new-session", "-d", "-s", "demo")...).CombinedOutput(); err != nil {
+			if out, err := exec.Command("tmux", manager.Args("new-session", "-d", "-s", "tdev-project-demo")...).CombinedOutput(); err != nil {
 				t.Fatal(err, string(out))
 			}
 		}
@@ -243,11 +243,11 @@ func TestListProjectsAcrossServers(t *testing.T) {
 			t.Fatal(err)
 		}
 		managed, err := local.Status(context.Background(), project)
-		if err != nil || managed.Status != "running" || managed.SessionName == "demo" || managed.Warning == "" {
+		if err != nil || managed.Status != "running" || !strings.HasPrefix(managed.SessionName, "tdev-project-") || managed.Warning == "" {
 			t.Fatalf("open should create a separate project session: %+v %v", managed, err)
 		}
 		for _, manager := range []tmux.Manager{local, remote} {
-			if err := exec.Command("tmux", manager.Args("has-session", "-t", "=demo")...).Run(); err != nil {
+			if err := exec.Command("tmux", manager.Args("has-session", "-t", "=tdev-project-demo")...).Run(); err != nil {
 				t.Fatal("unmanaged session was changed", err)
 			}
 		}

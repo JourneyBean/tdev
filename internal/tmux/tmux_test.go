@@ -214,12 +214,33 @@ func TestCJKMetadataInCLocale(t *testing.T) {
 	}
 }
 
+func TestProjectSessionNamePreservesOrdinarySession(t *testing.T) {
+	m, p, ctx := fixture(t)
+	if _, err := m.run(ctx, "new-session", "-d", "-s", p.Name); err != nil {
+		t.Fatal(err)
+	}
+	s, err := m.Status(ctx, p)
+	if err != nil || s.Status != "missing" || s.Warning != "" {
+		t.Fatalf("ordinary session affected project status: %+v %v", s, err)
+	}
+	s, err = m.Ensure(ctx, p)
+	if err != nil || s.SessionName != "tdev-project-demo" || s.Warning != "" {
+		t.Fatalf("project session: %+v %v", s, err)
+	}
+	if _, err := m.Stop(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.run(ctx, "has-session", "-t", "="+p.Name); err != nil {
+		t.Fatal("ordinary session was changed", err)
+	}
+}
+
 func TestProjectSessionNamePreservesUnmanagedSession(t *testing.T) {
 	m, p, ctx := fixture(t)
-	if SessionName(p) != "demo" {
+	if SessionName(p) != "tdev-project-demo" {
 		t.Fatal("session name", SessionName(p))
 	}
-	if _, err := m.run(ctx, "new-session", "-d", "-s", "demo"); err != nil {
+	if _, err := m.run(ctx, "new-session", "-d", "-s", SessionName(p)); err != nil {
 		t.Fatal(err)
 	}
 	s, err := m.Status(ctx, p)
@@ -230,7 +251,7 @@ func TestProjectSessionNamePreservesUnmanagedSession(t *testing.T) {
 		t.Fatal("unmanaged session was stopped", err)
 	}
 	managed, err := m.Ensure(ctx, p)
-	if err != nil || managed.Status != "running" || managed.SessionName == p.Name || managed.Warning == "" {
+	if err != nil || managed.Status != "running" || managed.SessionName != "tdev-project-"+strings.ReplaceAll(p.ID, "-", "") || managed.Warning == "" {
 		t.Fatalf("same-name session should allow a separate managed session: %+v %v", managed, err)
 	}
 	again, err := m.Ensure(ctx, p)
@@ -240,34 +261,48 @@ func TestProjectSessionNamePreservesUnmanagedSession(t *testing.T) {
 	if _, err := m.Stop(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.run(ctx, "has-session", "-t", "=demo"); err != nil {
+	if _, err := m.run(ctx, "has-session", "-t", "="+SessionName(p)); err != nil {
 		t.Fatal("unmanaged session was changed", err)
 	}
 }
 
 func TestProjectSessionUUIDSurvivesRename(t *testing.T) {
-	m, p, ctx := fixture(t)
-	original, err := m.Ensure(ctx, p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy := "tdev-" + strings.ReplaceAll(p.ID, "-", "")
-	if _, err := m.run(ctx, "rename-session", "-t", original.SessionID, legacy); err != nil {
-		t.Fatal(err)
-	}
-	// An unrelated session can use the project name alongside the owned session.
-	if _, err := m.run(ctx, "new-session", "-d", "-s", p.Name); err != nil {
-		t.Fatal(err)
-	}
-	s, err := m.Ensure(ctx, p)
-	if err != nil || s.Status != "running" || s.SessionID != original.SessionID || s.Generation != original.Generation || s.SessionName != legacy || s.Warning == "" {
-		t.Fatalf("renamed project session: %+v %v", s, err)
-	}
-	if _, err := m.Stop(ctx, p); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.run(ctx, "has-session", "-t", "="+p.Name); err != nil {
-		t.Fatal("unrelated session was changed", err)
+	for _, name := range []string{"project-name", "legacy-uuid", "custom"} {
+		t.Run(name, func(t *testing.T) {
+			legacyName := func(p config.Project) string {
+				switch name {
+				case "project-name":
+					return p.Name
+				case "legacy-uuid":
+					return "tdev-" + strings.ReplaceAll(p.ID, "-", "")
+				default:
+					return "custom-session"
+				}
+			}
+			m, p, ctx := fixture(t)
+			original, err := m.Ensure(ctx, p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			legacy := legacyName(p)
+			if _, err := m.run(ctx, "rename-session", "-t", original.SessionID, legacy); err != nil {
+				t.Fatal(err)
+			}
+			// An unrelated session can occupy the preferred name alongside the owned session.
+			if _, err := m.run(ctx, "new-session", "-d", "-s", SessionName(p)); err != nil {
+				t.Fatal(err)
+			}
+			s, err := m.Ensure(ctx, p)
+			if err != nil || s.Status != "running" || s.SessionID != original.SessionID || s.Generation != original.Generation || s.SessionName != legacy || s.Warning == "" {
+				t.Fatalf("renamed project session: %+v %v", s, err)
+			}
+			if _, err := m.Stop(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.run(ctx, "has-session", "-t", "="+SessionName(p)); err != nil {
+				t.Fatal("unrelated session was changed", err)
+			}
+		})
 	}
 }
 
@@ -290,7 +325,7 @@ func TestProjectSessionAmbiguousUUIDPreservesSessions(t *testing.T) {
 	if _, err := m.Stop(ctx, p); protocol.Normalize(err).Code != "SESSION_UNMANAGED" {
 		t.Fatal("ambiguous session was stopped", err)
 	}
-	for _, name := range []string{p.Name, "duplicate"} {
+	for _, name := range []string{SessionName(p), "duplicate"} {
 		if _, err := m.run(ctx, "has-session", "-t", "="+name); err != nil {
 			t.Fatal("ambiguous session was changed", err)
 		}

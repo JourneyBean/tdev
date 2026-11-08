@@ -33,7 +33,7 @@ type LiveWindow struct {
 	Leaves                                 []livePane
 }
 
-func SessionName(p config.Project) string { return p.Name }
+func SessionName(p config.Project) string { return "tdev-project-" + p.Name }
 func Quote(s string) string               { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 func (m Manager) Args(args ...string) []string {
 	if m.Socket != "" {
@@ -135,7 +135,7 @@ func (m Manager) Ensure(ctx context.Context, p config.Project) (Status, error) {
 	name := SessionName(p)
 	if s.Status == "unmanaged" && s.SessionName == name {
 		// Keep an unrelated same-name session and create a separate owned session.
-		name = "tdev-" + strings.ReplaceAll(p.ID, "-", "")
+		name = "tdev-project-" + strings.ReplaceAll(p.ID, "-", "")
 	} else if s.Status != "missing" {
 		if s.Status == "running" && s.Generation == "" {
 			if _, err = m.run(ctx, "set-option", "-t", s.SessionID, "@tdev_generation", config.NewID()); err != nil {

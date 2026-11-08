@@ -4,10 +4,10 @@
 选择已有连接或填写服务器地址，读取目标设备的项目配置，随后打开项目继续开发。
 复用系统 OpenSSH 和 tmux，远端无需数据库、HTTP API 或常驻 tdev 服务。
 
-当前源码版本为 `0.3.0`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
+当前源码版本为 `0.4.0`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
 挂载、签名安装升级和回滚。设计基线见[产品与技术设计](docs/design.md)，实现取舍见
 [开发记录](docs/development.md)，实际通过与尚未实测的场景见[第一版验收记录](docs/acceptance.md)。
-版本变更见[发布说明](docs/releases/v0.3.0.md)。二进制 Release 位于
+版本变更见[发布说明](docs/releases/v0.4.0.md)。二进制 Release 位于
 [GitHub](https://github.com/JourneyBean/tdev/releases)。
 
 ## 安装
@@ -117,7 +117,7 @@ tdev save
 tdev stop dev/demo -y
 ```
 
-tmux session 优先使用项目名称，如 `demo`，归属按项目 UUID 标记识别。旧版或手工改名的托管 session 可直接复用，名称差异显示 warning。同名普通会话保留，`ls` 显示 `unmanaged` 和 warning，`open` 创建独立的 `tdev-<UUID>` 托管会话。warning 保持列表刷新成功；多个会话使用同一项目 UUID 时，接管或停止操作需先确认归属。
+新建项目 tmux session 使用 `tdev-project-<name>`，如 `tdev-project-demo`，归属按项目 UUID 标记识别。旧版或手工改名的托管 session 可直接复用，名称差异显示 warning。普通会话使用项目逻辑名称时与项目独立。`tdev-project-<name>` 被无匹配 UUID 的会话占用时，`ls` 显示 `unmanaged` 和 warning，`open` 保留原会话并创建独立的 `tdev-project-<UUID>` 托管会话（UUID 去掉连字符）。scratch 使用 `tdev-scratch-<name>`，省略名称时使用自动生成的 UUID。warning 保持列表刷新成功；多个会话使用同一项目 UUID 时，接管或停止操作需先确认归属。
 
 open 遇到项目不存在时，确认后进入创建向导，保存后继续打开。新项目默认窗口为 `main`，已有项目沿用保存的名称。sh 的新窗口默认叫 `shell`，`--name` 可指定名称。
 

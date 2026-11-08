@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -29,10 +30,27 @@ type Receipt struct {
 	PreviousReceipt string `json:"previous_receipt,omitempty"`
 }
 
-func ReceiptPath(destination string) string { return destination + ".tdev-install.json" }
+func StateRoot() string {
+	if root := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(root) {
+		return filepath.Join(root, "tdev")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state", "tdev")
+}
+func installationDirectory(destination string) string {
+	hash := sha256.Sum256([]byte(destination))
+	return filepath.Join(StateRoot(), "installations", hex.EncodeToString(hash[:]))
+}
+func ReceiptPath(destination string) string {
+	return filepath.Join(installationDirectory(destination), "receipt.json")
+}
+func legacyReceiptPath(destination string) string { return destination + ".tdev-install.json" }
 func ReadReceipt(destination string) (Receipt, error) {
 	var r Receipt
 	b, err := os.ReadFile(ReceiptPath(destination))
+	if os.IsNotExist(err) {
+		b, err = os.ReadFile(legacyReceiptPath(destination))
+	}
 	if err != nil {
 		return r, err
 	}
@@ -86,6 +104,12 @@ func lockKey(destination string) string {
 	h := sha256.Sum256([]byte(destination))
 	return "binary-" + hex.EncodeToString(h[:12])
 }
+
+// backupDirectory isolates rollback data for each canonical installation target.
+func backupDirectory(store config.Store, destination string) (string, error) {
+	return transfer.Canonical(filepath.Join(installationDirectory(destination), "backups"))
+}
+
 func Install(ctx context.Context, store config.Store, b Bundle, destination string) (Receipt, error) {
 	var r Receipt
 	var err error
@@ -100,11 +124,14 @@ func Install(ctx context.Context, store config.Store, b Bundle, destination stri
 	if err = os.MkdirAll(filepath.Dir(destination), 0700); err != nil {
 		return r, err
 	}
-	unlock, err := store.Lock(ctx, lockKey(destination), "install")
+	unlock, err := (config.Store{Root: StateRoot()}).Lock(ctx, lockKey(destination), "install")
 	if err != nil {
 		return r, err
 	}
 	defer unlock()
+	if err = migrateInstallation(store, destination); err != nil {
+		return r, err
+	}
 	before, err := transfer.SnapshotPath(destination)
 	if err != nil {
 		return r, err
@@ -139,24 +166,45 @@ func Install(ctx context.Context, store config.Store, b Bundle, destination stri
 	if err != nil {
 		return r, err
 	}
+	unchanged := false
 	if before.Kind == "file" {
 		old, err := os.ReadFile(destination)
 		if err != nil {
 			return r, err
 		}
-		r.PreviousPath = destination + ".backup-" + time.Now().UTC().Format("20060102T150405.000000000") + "-" + config.NewID()[:8]
-		if err = config.AtomicWrite(r.PreviousPath, old, 0700); err != nil {
-			return r, err
-		}
-		oldHash := sha256.Sum256(old)
-		r.PreviousSHA256 = hex.EncodeToString(oldHash[:])
-		if prior, err := os.ReadFile(ReceiptPath(destination)); err == nil {
-			r.PreviousReceipt = r.PreviousPath + ".json"
-			if err = config.AtomicWrite(r.PreviousReceipt, prior, 0600); err != nil {
+		unchanged = bytes.Equal(old, data)
+		if unchanged {
+			prior, err := ReadReceipt(destination)
+			if err != nil && !os.IsNotExist(err) {
 				return r, err
 			}
-		} else if !os.IsNotExist(err) {
-			return r, err
+			if err == nil && prior.SHA256 == r.SHA256 {
+				r.PreviousPath = prior.PreviousPath
+				r.PreviousSHA256 = prior.PreviousSHA256
+				r.PreviousReceipt = prior.PreviousReceipt
+			}
+		} else {
+			backupDir, err := backupDirectory(store, destination)
+			if err != nil {
+				return r, err
+			}
+			if err = os.MkdirAll(backupDir, 0700); err != nil {
+				return r, err
+			}
+			r.PreviousPath = filepath.Join(backupDir, "tdev.backup-"+time.Now().UTC().Format("20060102T150405.000000000")+"-"+config.NewID()[:8])
+			if err = config.AtomicWrite(r.PreviousPath, old, 0700); err != nil {
+				return r, err
+			}
+			oldHash := sha256.Sum256(old)
+			r.PreviousSHA256 = hex.EncodeToString(oldHash[:])
+			if prior, err := os.ReadFile(ReceiptPath(destination)); err == nil {
+				r.PreviousReceipt = r.PreviousPath + ".json"
+				if err = config.AtomicWrite(r.PreviousReceipt, prior, 0600); err != nil {
+					return r, err
+				}
+			} else if !os.IsNotExist(err) {
+				return r, err
+			}
 		}
 	}
 	now, err := transfer.SnapshotPath(destination)
@@ -166,18 +214,38 @@ func Install(ctx context.Context, store config.Store, b Bundle, destination stri
 	if now != before {
 		return r, protocol.Fail("DESTINATION_CHANGED", 4, "binary changed during installation")
 	}
-	if err = os.Chmod(candidate, 0755); err != nil {
-		return r, err
-	}
-	if err = os.Rename(candidate, destination); err != nil {
-		return r, err
+	// Keep identical installed bytes in place, repairing executable permissions when needed.
+	if unchanged {
+		info, err := os.Stat(destination)
+		if err != nil {
+			return r, err
+		}
+		if info.Mode().Perm() != 0755 {
+			err = os.Chmod(destination, 0755)
+			if err != nil {
+				return r, err
+			}
+		}
+	} else {
+		if err = os.Chmod(candidate, 0755); err != nil {
+			return r, err
+		}
+		if err = os.Rename(candidate, destination); err != nil {
+			return r, err
+		}
 	}
 	encoded, _ := json.MarshalIndent(r, "", "  ")
-	if err = config.AtomicWrite(ReceiptPath(destination), encoded, 0600); err != nil {
-		return r, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "binary installed but receipt write failed: " + err.Error(), Details: r}
+	priorReceipt, readErr := os.ReadFile(ReceiptPath(destination))
+	if readErr != nil || !bytes.Equal(priorReceipt, encoded) {
+		if err = config.AtomicWrite(ReceiptPath(destination), encoded, 0600); err != nil {
+			return r, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "binary installed but receipt write failed: " + err.Error(), Details: r}
+		}
 	}
 	if err = Candidate(ctx, destination, r.Version); err != nil {
 		return r, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "installed binary verification failed; backup retained: " + err.Error(), Details: r}
+	}
+	if err = pruneBackups(store, destination); err != nil {
+		return r, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "binary installed but backup cleanup failed: " + err.Error(), Details: r}
 	}
 	return r, nil
 }
@@ -186,11 +254,14 @@ func Rollback(ctx context.Context, store config.Store, destination string) (any,
 	if err != nil {
 		return nil, err
 	}
-	unlock, err := store.Lock(ctx, lockKey(destination), "install")
+	unlock, err := (config.Store{Root: StateRoot()}).Lock(ctx, lockKey(destination), "install")
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+	if err = migrateInstallation(store, destination); err != nil {
+		return nil, err
+	}
 	r, err := ReadReceipt(destination)
 	if err != nil {
 		return nil, err
@@ -198,7 +269,14 @@ func Rollback(ctx context.Context, store config.Store, destination string) (any,
 	if r.PreviousPath == "" || r.PreviousSHA256 == "" {
 		return nil, VerifyError("no previous binary backup is recorded")
 	}
-	if filepath.Dir(r.PreviousPath) != filepath.Dir(destination) || !strings.HasPrefix(r.PreviousPath, destination+".backup-") {
+	backupDir, err := backupDirectory(store, destination)
+	if err != nil {
+		return nil, err
+	}
+	managedBackup := filepath.Dir(r.PreviousPath) == backupDir && strings.HasPrefix(filepath.Base(r.PreviousPath), "tdev.backup-")
+	// Receipts written by earlier versions still refer to adjacent backups.
+	legacyBackup := filepath.Dir(r.PreviousPath) == filepath.Dir(destination) && strings.HasPrefix(r.PreviousPath, destination+".backup-")
+	if !managedBackup && !legacyBackup {
 		return nil, VerifyError("invalid backup path")
 	}
 	hash, err := transfer.Hash(destination)
@@ -248,5 +326,8 @@ func Rollback(ctx context.Context, store config.Store, destination string) (any,
 	if err != nil || actual != backupHash {
 		return nil, fmt.Errorf("rollback verification failed: %v", err)
 	}
-	return map[string]string{"destination": destination, "restored_sha256": actual, "status": "rolled_back", "backup_retained": r.PreviousPath}, nil
+	if err = pruneBackups(store, destination); err != nil {
+		return nil, protocol.Fail("PARTIAL_SUCCESS", 9, "binary restored but backup cleanup failed: %v", err)
+	}
+	return map[string]string{"destination": destination, "restored_sha256": actual, "status": "rolled_back"}, nil
 }

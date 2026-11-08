@@ -236,7 +236,6 @@ func (listing projectListing) print(out io.Writer) error {
 		}
 		for _, scratch := range entry.Scratches {
 			rows = append(rows, [6]string{name, scratch.Name, "scratch", scratch.Status.Status, scratch.Directory, "—"})
-			rows = append(rows, [6]string{"", "", "", "", fmt.Sprintf("恢复：tdev open %s/%s", name, scratch.Name)})
 		}
 	}
 	if err := printListingTable(out, rows); err != nil {

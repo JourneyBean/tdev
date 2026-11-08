@@ -1,6 +1,6 @@
 # 开发记录与实现取舍
 
-Last verified: 2026-11-08。版本：0.3.0。历史集成验收使用开发版版本号，见验收记录。
+Last verified: 2026-11-08。版本：0.4.0。历史集成验收使用开发版版本号，见验收记录。
 
 ## GitHub CI 与发布
 
@@ -14,6 +14,12 @@ GitHub Actions 在 main 推送、PR 及版本标签事件中运行静态检查�
 
 签名使用 Actions Secret 中的既有 PKCS8 Ed25519 密钥，先核对仓库公钥，再生成四平台签名包；临时密钥按步骤清理。发布前验证签名、摘要及安装脚本，固定上传 14 个文件，全部上传成功后公开草稿。测试任务只读，发布任务单独授予 contents: write；同一标签的执行串行化。现有 Release 保持原样，失败草稿由维护者检查后处理。配置步骤见 [GitHub Actions 发布](github-release.md)。
 
+## v0.4.0 版本
+
+默认构建与源码版本统一为 0.4.0。安装状态迁入 XDG 状态目录，重复安装相同内容保留目标文件与回滚链，每个安装目标保留当前版本之前的两个版本。旧收据及完整备份链在安装或回滚时校验迁移；回退到仅支持旧收据路径的历史版本后，使用新版安装脚本再次升级。
+
+新建项目会话使用 `tdev-project-<name>`，旧会话继续按 UUID 识别复用。打开本机项目时跳过目标为回环地址的自动转发；scratch 列表每个会话显示一行。机器协议、配置 schema 均保持为 1，安装签名公钥沿用现有版本。发布通过现有 GitHub Actions 完成真实 SSH/tmux 验收、四平台签名构建及公开下载验证。
+
 ## v0.3.0 版本
 
 默认构建与源码版本统一为 0.3.0。本次次版本更新包含 pane 分屏保存与恢复、ls 六列表格及 doctor 自然语言诊断。机器协议和配置 schema 仍为 1；分屏配置通过 pane-layout-v1 协商兼容性，安装签名公钥沿用现有版本。
@@ -26,7 +32,11 @@ GitHub Actions 在 main 推送、PR 及版本标签事件中运行静态检查�
 
 ## ls 表格展示
 
-`ls` 的文本输出使用 SERVER、NAME、TYPE、STATUS、DIR、FORWARDS 六列总表，服务器与项目名称分别展示。列宽使用终端显示单元计算，支持中文名称对齐；FORWARDS 显示 `监听地址:端口 -> 目标地址:端口`，R 方向使用 `<-`；IPv6 地址保留方括号，省略配置中的映射 ID。第一条转发与项目同行，后续转发在 FORWARDS 列下方排列，无映射显示 —；scratch 恢复命令放在目录列下方。空服务器保留创建提示，服务器错误和缓存时间放在表格下方。缓存刷新与最终输出共用渲染器，管道保留完整路径，JSON 协议沿用现有结构。
+`ls` 的文本输出使用 SERVER、NAME、TYPE、STATUS、DIR、FORWARDS 六列总表，服务器与项目名称分别展示。列宽使用终端显示单元计算，支持中文名称对齐；FORWARDS 显示 `监听地址:端口 -> 目标地址:端口`，R 方向使用 `<-`；IPv6 地址保留方括号，省略配置中的映射 ID。第一条转发与项目同行，后续转发在 FORWARDS 列下方排列，无映射显示 —；scratch 每个会话显示一行。空服务器保留创建提示，服务器错误和缓存时间放在表格下方。缓存刷新与最终输出共用渲染器，管道保留完整路径，JSON 协议沿用现有结构。
+
+## 本机项目自动转发
+
+`open local/<project>` 按生效配置中的服务目标地址筛选自动转发，跳过 `localhost`（大小写不敏感）、`127.0.0.1` 和 `::1`，L/R 方向均适用。其他地址保留自动转发；全部跳过时直接附着会话，省去监听器与转发日志。筛选仅作用于 `open`，保存的项目定义、客户端覆盖和显式 `forward` 命令保持原有语义；远端项目继续启动全部生效转发。
 
 ## pane 分屏布局
 
@@ -44,9 +54,9 @@ API 增加 `pane-layout-v1`，携带 layout 的远端写入先协商该能力。
 
 ## scratch 临时会话
 
-恢复入口统一为 open，scratch 用户命令仅保留创建。open 的解析在现有项目解析器中按需纳入 scratch；其他项目操作保持项目范围。裸名称先查本机，再查包含项目和 scratch 的服务器缓存，最后查询远端实际定义与会话。缓存仅用于定位，进入前重新读取项目与 scratch；同一目标同名返回冲突，已知缓存 scratch 结束后返回缺失，未知名称沿用项目创建向导。scratch 附着跳过项目转发与挂载，--mount 返回参数错误。open 的名称补全包含 scratch，ls 的恢复提示统一生成 open 命令。
+恢复入口统一为 open，scratch 用户命令仅保留创建。open 的解析在现有项目解析器中按需纳入 scratch；其他项目操作保持项目范围。裸名称先查本机，再查包含项目和 scratch 的服务器缓存，最后查询远端实际定义与会话。缓存仅用于定位，进入前重新读取项目与 scratch；同一目标同名返回冲突，已知缓存 scratch 结束后返回缺失，未知名称沿用项目创建向导。scratch 附着跳过项目转发与挂载，--mount 返回参数错误。open 的名称补全包含 scratch，ls 每个 scratch 会话显示一行。
 
-`scratch` 使用独立 `@tdev_scratch_name`、`@tdev_scratch_directory` 和 generation 标记，创建与标记在同一 tmux 命令队列中完成，标记显式指定新会话目标，保留调用方的 tmux 上下文。逻辑名称独立于项目名称，实际 tmux 名称带 `tdev-scratch-` 前缀；同名普通会话保持原状，实际名称占用时报冲突。配置根内的 scratch-session 锁串行化同名创建，tmux 的名称唯一约束处理跨配置根竞争。会话不携带项目 UUID，项目配置和 save 继续只管理项目会话。
+`scratch` 使用独立 `@tdev_scratch_name`、`@tdev_scratch_directory` 和 generation 标记，创建与标记在同一 tmux 命令队列中完成，标记显式指定新会话目标，保留调用方的 tmux 上下文。逻辑名称独立于项目名称，实际 tmux 名称为 `tdev-scratch-<name>`，未指定名称时直接生成 UUID 作为逻辑名称；同名普通会话保持原状，实际名称占用时报冲突。配置根内的 scratch-session 锁串行化同名创建，tmux 的名称唯一约束处理跨配置根竞争。会话不携带项目 UUID，项目配置和 save 继续只管理项目会话。
 
 临时会话复用现有 OpenSSH 终端附着、客户端就绪检测及重连预算，按 session ID 与 generation 校验原会话。本机 tmux 内使用 switch-client 进入临时会话。机器 API 保持非交互，通过新增 scratch-v1 能力检查；JSON scratch 用户入口创建后返回，终端入口执行附着。
 
@@ -72,7 +82,7 @@ ls 依据标准输出是否为终端启用原地刷新，先显示本机与远�
 
 setup 的客户端配置锁仅覆盖重新读取、冲突检查和连接配置写入；保存后立即释放，再执行缓存更新与首个项目向导。多个终端可同时停留在项目输入界面，后续 setup 可独立保存连接。
 
-会话状态通过一次 `list-sessions` 读取 UUID、名称和初始化标记，按 UUID 确认归属。旧版命名及手工改名的托管会话直接复用，名称差异返回 `session.warning`；同名普通会话返回 `unmanaged` 和 warning。`open` 遇到同名普通会话时创建独立的 `tdev-<UUID>` 托管会话，原会话保留。重复 UUID 返回 warning，接管和停止操作返回 `SESSION_UNMANAGED`。`ls` 保持各项目与服务器的刷新结果，warning 展示在项目状态标签中；应用错误状态为 `error`，连接失败为 `unreachable`，协议不兼容为 `upgrade-required`。
+会话状态通过一次 `list-sessions` 读取 UUID、名称和初始化标记，按 UUID 确认归属。旧版命名及手工改名的托管会话直接复用，名称差异返回 `session.warning`；`tdev-project-<name>` 被无匹配 UUID 的会话占用时返回 `unmanaged` 和 warning，`open` 创建独立的 `tdev-project-<UUID>` 托管会话（UUID 去掉连字符），原会话保留。普通会话使用项目逻辑名称时与项目独立。重复 UUID 返回 warning，接管和停止操作返回 `SESSION_UNMANAGED`。`ls` 保持各项目与服务器的刷新结果，warning 展示在项目状态标签中；应用错误状态为 `error`，连接失败为 `unreachable`，协议不兼容为 `upgrade-required`。
 
 setup 的初次项目发现与首个项目创建后的刷新仅读取项目定义，返回及缓存的会话状态为 unknown，由 ls 刷新实际状态。sh 创建窗口后，仅在接下来需要 attach 时额外读取会话状态；JSON 输出与本机 tmux 内窗口切换直接使用创建结果。显式指定项目的配置、转发、传输、挂载与补全操作独立于 tmux 状态；省略项目名时读取当前会话的项目标记用于定位目标。doctor 和安装前检查保留 tmux 程序依赖检查。
 
@@ -90,7 +100,7 @@ ls 并发刷新，每台服务器的版本与项目/会话查询合并为一次 
 
 create、open 缺失项目和 edit 使用同一份草稿向导。目录、窗口和映射全部收集并验证，最终确认后再写入；完整创建通过 api project create --stdin 原子完成。edit 预填原值并携带原 revision。L 映射的服务地址一次输入 host:port，客户端监听差异按 UUID 和 forward ID 保存在 overrides.yaml。保存定义与保存 override 的部分失败分别报告。
 
-tmux session 优先使用项目名称，UUID 标记验证归属并支持复用旧会话。新项目窗口 main；sh --name 指定新窗口名称，默认 shell。open 默认只建立会话、转发和终端；--mount 显式挂载，独立 mount/unmount 保留。挂载路径按项目 UUID 保存在本机 override；open 退出后挂载保留。本机项目直接进入 tmux，转发用本地 TCP listener，文件传输复用暂存与哈希校验。
+新建项目 tmux session 使用 `tdev-project-<name>`，UUID 标记验证归属并支持复用旧名称的会话，保留原 session ID 和连接。新项目窗口 main；sh --name 指定新窗口名称，默认 shell。open 默认只建立会话、转发和终端；--mount 显式挂载，独立 mount/unmount 保留。挂载路径按项目 UUID 保存在本机 override；open 退出后挂载保留。本机项目直接进入 tmux，转发用本地 TCP listener，文件传输复用暂存与哈希校验。
 
 ## v0.0.3 连接向导与配置发现
 
@@ -195,6 +205,10 @@ bootstrap 先通过 OpenSSL 3+ 校验签名校验表和二进制哈希，再执�
 校验 manifest、版本和协议，保留备份并原子安装。Go updater 直接验证签名 manifest，限制
 下载大小、HTTPS 和安全重定向。远端不必访问发布网站：客户端验证后上传，远端校验上传
 内容，再执行签名候选安装。更新不重启 tmux，不修改 authorized_keys，不执行 sudo。
+
+二进制安装在验证候选后比较实际内容。相同内容保留目标文件，按需恢复 0755 权限；匹配当前哈希的 receipt 沿用已有回滚记录，下载源与信任信息更新为本次验证结果，内容相同的 receipt 跳过写入。缺少 receipt 的相同二进制直接登记；哈希过期的 receipt 清除旧回滚引用，损坏的 receipt 报错。只有二进制内容变化时创建新备份。安装状态根目录为 `${XDG_STATE_HOME:-~/.local/state}/tdev/`，相对的 XDG_STATE_HOME 按未设置处理。`installations/<规范化安装目标绝对路径的 SHA256>/receipt.json` 保存安装记录，`backups/` 保存该目标的二进制与历史 receipt；安装锁放在状态根目录，跨配置根目录的同一安装目标共享锁。
+
+读取优先使用状态目录记录，缺失时兼容二进制旁的 `.tdev-install.json`。安装与回滚持锁迁移记录及其引用的完整备份链，也兼容配置根目录下曾使用的 `binary-backups/`。迁移逐级校验目标、哈希和记录对应关系，复制并原子写入新记录后清理旧文件，支持跨文件系统迁移。迁移失败保留旧数据；未被记录引用的文件保留原位。每次成功安装或回滚后，将回滚链限制为当前版本之前的两个版本，先原子更新最旧保留版本的 receipt，截断更早的引用，再清理当前目标备份目录中已失去引用的安装器备份。回滚后清理已恢复版本的备份副本；无关文件、目录和符号链接保留。远端 bootstrap 在目标机器解析 HOME、XDG_STATE_HOME 和安装目标路径，优先读取新记录，兼容旧记录，复用已信任的发布公钥与下载源。
 
 setup 自动读取已有连接，也支持使用现有 identity/agent 创建私有 SSH profile，Include 既有 SSH config。认证交给系统 OpenSSH，安装与传输需要可批模式认证的身份。缺少 tmux 等依赖时提示先准备环境。四平台签名二进制与安装脚本由公开 Release 分发。
 

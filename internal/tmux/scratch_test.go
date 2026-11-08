@@ -19,7 +19,7 @@ func TestScratchLifecycleAndOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Name != "debug" || s.Generation == "" || s.SessionID == existing.SessionID || s.Directory != p.Directory {
+	if s.Name != "debug" || s.SessionName != "tdev-scratch-debug" || s.Generation == "" || s.SessionID == existing.SessionID || s.Directory != p.Directory {
 		t.Fatalf("bad scratch: %+v", s)
 	}
 	marker, err := m.run(ctx, "show-options", "-qv", "-t", s.SessionID, "@tdev_project_id")
@@ -70,7 +70,7 @@ func TestScratchLifecycleAndOwnership(t *testing.T) {
 		t.Fatal("project changed", current, err)
 	}
 	generated, err := m.CreateScratch(ctx, "", "")
-	if err != nil || !strings.HasPrefix(generated.Name, "scratch-") {
+	if err != nil || len(generated.Name) != 36 || generated.SessionName != "tdev-scratch-"+generated.Name {
 		t.Fatal(generated, err)
 	}
 	if _, err = m.CreateScratch(ctx, strings.Repeat("a", 64), p.Directory); err != nil {

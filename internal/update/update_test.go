@@ -95,6 +95,7 @@ func TestPackagedInstallerRejectsTamperedBinary(t *testing.T) {
 }
 
 func TestInstallUpgradeRollbackAndExternalChanges(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	ctx := context.Background()
 	store := config.Store{Root: t.TempDir()}
 	destination := filepath.Join(t.TempDir(), "bin", "tdev")
@@ -143,6 +144,7 @@ func TestInstallUpgradeRollbackAndExternalChanges(t *testing.T) {
 	}
 }
 func TestUntrustedManifestAndSymbolicTarget(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	dir, pub := releaseFixture(t, "0.1.0")
 	data, _ := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	signature, _ := os.ReadFile(filepath.Join(dir, "manifest.sig"))

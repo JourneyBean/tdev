@@ -197,6 +197,7 @@ func (p *terminalProcess) exit(t *testing.T, want int) {
 }
 
 func TestFirstVersionSSHWorkflow(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	if runtime.GOOS != "linux" {
 		t.Skip("isolated sshd acceptance runs on Linux")
 	}
@@ -507,6 +508,7 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Run("upgrade_without_old_api_preserves_trusted_key", func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", filepath.Join(s.Dir, "state"))
 			old := []byte("#!/bin/sh\nif [ \"$1\" = --json ] && [ \"$2\" = version ]; then printf '%s\\n' '{\"protocol_version\":1,\"ok\":true,\"data\":{\"version\":\"0.0.3\"}}'; exit 0; fi\nexit 2\n")
 			receipt, err := update.ReadReceipt(remoteBin)
 			if err != nil {
@@ -518,7 +520,10 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 			if err = config.AtomicWrite(remoteBin, old, 0700); err != nil {
 				t.Fatal(err)
 			}
-			if err = config.AtomicWrite(update.ReceiptPath(remoteBin), metadata, 0600); err != nil {
+			if err = config.AtomicWrite(remoteBin+".tdev-install.json", metadata, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(update.ReceiptPath(remoteBin)); err != nil {
 				t.Fatal(err)
 			}
 			executeBinary(t, binary, root, s.Config, "", 0, "upgrade", "--remote", "installed", "--release-dir", v2, "-y")

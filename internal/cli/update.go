@@ -219,8 +219,8 @@ func (a *app) shell(ctx context.Context, t target, command string) (data []byte,
 }
 func (a *app) installRemote(ctx context.Context, t target, c *cobra.Command) (any, error) {
 	marker := "TDEV_INSTALL_" + strings.ReplaceAll(config.NewID(), "-", "")
-	receiptPath := tmux.Quote(update.ReceiptPath(t.Server.RemoteBinary))
-	script := "uname -s; uname -m; command -v tmux >/dev/null || { printf 'tmux is required; install it before setup\\n' >&2; exit 7; }; printf '\\n" + marker + "\\n'; if test -f " + receiptPath + "; then cat -- " + receiptPath + "; fi"
+	receiptScript := remoteReceiptScript(t.Server.RemoteBinary)
+	script := "uname -s; uname -m; command -v tmux >/dev/null || { printf 'tmux is required; install it before setup\\n' >&2; exit 7; }; printf '\\n" + marker + "\\n'; " + receiptScript
 	platform, err := a.shell(ctx, t, script)
 	if err != nil {
 		return nil, err
@@ -320,4 +320,27 @@ func (a *app) installRemote(ctx context.Context, t target, c *cobra.Command) (an
 		return nil, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "installed binary did not pass post-install control verification: " + err.Error(), Details: result}
 	}
 	return result, nil
+}
+
+// Resolve state paths on the target: its home, XDG setting and canonical binary
+// parent can differ from the client's, even when the destination string matches.
+func remoteReceiptScript(destination string) string {
+	return `destination=` + tmux.Quote(destination) + `
+case "$destination" in '~/'*) destination="$HOME/${destination#'~/'}";; esac
+legacy="$destination.tdev-install.json"
+if parent=$(CDPATH= cd -- "$(dirname -- "$destination")" 2>/dev/null && pwd -P); then
+ destination="${parent%/}/$(basename -- "$destination")"
+ if command -v sha256sum >/dev/null 2>&1; then
+  digest=$(printf '%s' "$destination" | sha256sum)
+ elif command -v shasum >/dev/null 2>&1; then
+  digest=$(printf '%s' "$destination" | shasum -a 256)
+ else
+  printf 'sha256sum or shasum is required for bootstrap\n' >&2; exit 7
+ fi
+ digest=${digest%% *}
+ case "${XDG_STATE_HOME:-}" in /*) state="$XDG_STATE_HOME";; *) state="$HOME/.local/state";; esac
+ receipt="$state/tdev/installations/$digest/receipt.json"
+ if test -f "$receipt"; then cat -- "$receipt"; exit; fi
+fi
+if test -f "$legacy"; then cat -- "$legacy"; fi`
 }

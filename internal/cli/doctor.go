@@ -76,7 +76,7 @@ func (r doctorReport) print(out io.Writer) error {
 			case strings.Contains(warning, "has no matching project UUID"):
 				problem("项目 %s 的同名 tmux 会话未匹配项目标记，现有会话已保留；open 会使用独立的托管会话。", label)
 			case strings.HasPrefix(warning, "project session is named"):
-				problem("项目 %s 的会话名称与项目名不同，已通过项目标记找到会话，可以继续使用。当前会话名：%s。", label, p.Session.SessionName)
+				problem("项目 %s 的会话名称与当前命名规则不同，已通过项目标记找到会话，可以继续使用。当前会话名：%s。", label, p.Session.SessionName)
 			default:
 				problem("项目 %s 有会话警告：%s", label, warning)
 			}

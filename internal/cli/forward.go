@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"tdev/internal/config"
@@ -79,6 +80,7 @@ func (a *app) forwardCommand() {
 
 // Background forwarding events are written only to a private log, never to the live terminal.
 func (a *app) openForwards(ctx context.Context, t target, fs []config.Forward) (func(), error) {
+	fs = automaticForwards(t, fs)
 	if len(fs) == 0 {
 		return func() {}, nil
 	}
@@ -130,6 +132,21 @@ func (a *app) openForwards(ctx context.Context, t target, fs []config.Forward) (
 		}
 	}
 	return cleanup, nil
+}
+
+func automaticForwards(t target, fs []config.Forward) []config.Forward {
+	if !t.Local {
+		return fs
+	}
+	kept := make([]config.Forward, 0, len(fs))
+	for _, f := range fs {
+		switch strings.ToLower(f.TargetHost) {
+		case "localhost", "127.0.0.1", "::1":
+			continue
+		}
+		kept = append(kept, f)
+	}
+	return kept
 }
 
 func startProjectForwards(ctx context.Context, t target, fs []config.Forward, policy reconnect.Policy) *forward.Group {

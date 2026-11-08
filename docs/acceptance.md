@@ -1,6 +1,6 @@
 # 开发验收记录
 
-Last verified: 2026-11-08。源码版本：0.3.0。下表保留集成验收使用的开发版版本号。
+Last verified: 2026-11-08。源码版本：0.4.0。下表保留集成验收使用的开发版版本号。
 
 本记录汇总第一版核心功能的自动化验证、环境实测和待验证项。
 
@@ -16,6 +16,12 @@ Bookworm 云端运行通过 SSH、CJK 与连续断线测试后，本机 scratch 
 
 2026-11-08：修复后的 main CI 与 v0.3.0 补发均在 GitHub 成功，补发 CLI 完整竞态集成约 156 秒。v0.3.0 已公开并成为 latest。匿名资产 API 下载的 14 个附件通过独立公钥、Ed25519 签名、manifest、SHA256SUMS 和四平台压缩包内容校验；macOS arm64 与 Linux amd64 的隔离签名安装均返回 0.3.0。常规下载地址验收遇到 GitHub 边缘节点 504，新增公开下载验证 workflow 用于云端在线重验。Linux arm64 与 macOS amd64 产物完成交叉构建及文件校验。
 
+## v0.4.0 版本验收
+
+2026-11-08：默认构建、源码版本与发布说明统一为 0.4.0。版本更新后的完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 全部通过，CLI 集成用时 125.169 秒、真实 tmux 用时 4.891 秒、安装升级测试用时 5.401 秒，覆盖连续断线重连、会话命名兼容、分屏、本机自动转发、状态迁移与两版回滚。`make check`、`make cross`、`make build` 通过；构建产物 JSON version 返回 0.4.0，协议及 schema 均为 1。公开文件与文件名扫描未发现凭据或内部环境标识。
+
+原生执行环境为 Linux amd64，四平台完成交叉构建。macOS 原生交互、跨文件系统迁移、中断恢复等覆盖限制见“尚未完成的环境或人工验收”。
+
 ## v0.3.0 版本验收
 
 2026-11-08：默认构建、源码及发布说明统一为 0.3.0。完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 179 秒，包含真实隔离 SSH/tmux 分屏、保存恢复及诊断回归。`make check`、`make cross`、`make build` 通过；最终二进制 JSON version 返回 0.3.0、pane-layout-v1，协议及 schema 均为 1。四平台二进制格式及架构校验通过，新增内容、文件名与构建路径扫描未发现凭据或内部环境标识。原生执行环境为 Linux；macOS 原生交互、实际 FUSE 挂载及极小终端尺寸下布局恢复待对应环境验证。
@@ -27,6 +33,8 @@ Bookworm 云端运行通过 SSH、CJK 与连续断线测试后，本机 scratch 
 完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 125 秒；最终定向 doctor、跨服务器列表与离线刷新回归通过。`make check`（go vet、gofmt、diff 与脚本语法）和 `make build` 通过。构建产物以临时配置及私有 tmux socket 验证普通文本和 JSON。原生执行环境为 Linux；本轮验证输出解释，实际 FUSE 挂载及 macOS 原生显示待对应环境验证。
 
 ## ls 表格验收
+
+2026-11-08：scratch 列表每个会话只显示一行，移除目录下方的恢复命令提示。表格对齐测试通过；临时配置和独立 tmux socket 的构建产物冒烟验证表头、分隔线及单行 scratch 输出。12 项真实 tmux 测试以 `go test -race -count=1 ./internal/tmux` 通过。`go test -race ./...`、`go vet ./...`、`gofmt -l cmd internal` 和 `git diff --check` 通过，CLI 集成约 125 秒。原生验证环境为 Linux，macOS 显示待实测。
 
 2026-11-06：列表增加独立 FORWARDS 列，以 `监听地址:端口 -> 目标地址:端口` 展示 L 方向，R 使用 `<-`，隐藏映射 ID；多条映射按列向下排列。单元测试验证中文对齐、首条映射同行、后续映射列对齐、双向箭头、IPv6 方括号及 ID 隐藏。真实隔离 SSH/PTY 定向回归通过，覆盖表头、空服务器行、中文名称列宽、缓存先显示与远端放行后刷新、离线缓存及 warning 状态行。构建产物使用临时配置创建本机项目后，实际 ls 输出 SERVER、NAME、TYPE、STATUS、DIR、FORWARDS 六列。完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 122 秒，包含真实隔离 SSH/tmux；`make check`、`make build` 与四平台 `make cross` 通过。原生执行环境为 Linux；macOS 原生显示及窄终端下长路径换行待实测，管道保留完整路径。
 
@@ -210,7 +218,30 @@ darwin amd64/arm64 为对应架构 Mach-O。Linux amd64 与 Mac arm64 产物已�
 传输不自动改写文件名的 Unicode 字节。Mac 目标对规范化等价或大小写别名保守拒绝。
 混合 NFC/NFD 目录及等价重名受 Mac/SSHFS 命名规则限制，需要用户显式处理名称冲突。
 
+## 安装状态目录迁移
+
+安装记录与备份迁入 XDG 状态目录的验证已通过：
+
+- 单元测试覆盖默认状态目录、自定义 XDG_STATE_HOME、相对路径回退、安装目标隔离、重复安装保持文件身份与修改时间。
+- 从二进制相邻路径及旧配置备份目录迁移，覆盖安装触发、回滚触发、完整历史收据链及连续两次回滚；损坏备份使迁移停止并保留旧文件。
+- 真实 SSH 与签名发布包验证远端独立 XDG 目录、旧路径收据、旧二进制缺少 API 时复用信任公钥、升级及回滚；升级前后 tmux 会话 generation 保持一致。
+- `go test -race ./...`、`go vet ./...`、`gofmt -l cmd internal`、`git diff --check`、`make cross` 通过。真实 tmux 的 12 项测试使用独立 socket 和 `/dev/null` 配置通过，覆盖并发、持久 shell、布局、服务退出和会话归属。
+
+## 安装幂等与两版回滚保留
+
+2026-11-08：最终组合实现通过 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...`，CLI 集成约 124 秒，包含真实隔离 SSH/tmux；`make check` 和四平台 `make cross` 通过。安装路径保持原值，收据与回滚副本使用 XDG 状态目录。
+
+回归覆盖连续安装五个版本后仅保留前两版、相同内容重复安装保持文件身份及修改时间、下载源更新保留回滚链、缺少收据时登记现有二进制和恢复执行权限、旧路径四份历史备份迁移后裁剪为两版、连续回滚两次及边界拒绝。回滚后清理已恢复版本的备份副本；其他安装目标、无关文件和符号链接保持完整。原生执行环境为 Linux，macOS 完成交叉构建。
+
+## 本机项目回环地址自动转发（2026-11-08）
+
+`open local/<project>` 回归通过：`localhost`、`127.0.0.1`、`::1` 在监听端口已占用时跳过自动转发，保持无转发诊断和运行日志。筛选测试覆盖 localhost 大小写、L/R 方向、混合目标、远端项目保留全部转发以及原始定义保持完整。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，CLI 约 127 秒，真实 tmux 3.6 测试约 4 秒，使用独立 socket 和 `/dev/null` 配置。`make check` 与四平台 `make cross` 通过。原生执行环境为 Linux，IPv6 回环跳过规则已验证，实际 IPv6 数据转发与 macOS 原生执行仍沿用下列验收边界。
+
 ## 尚未完成的环境或人工验收
+
+- 状态迁移已在 Linux 本机与隔离 SSH 环境实测；macOS 已完成交叉构建，真实跨文件系统迁移及中断恢复待实测。历史发行版回退后通过新版安装脚本重新升级的完整流程待实测。
 
 - Linux FUSE 挂载待实测；状态机和失败路径已有测试，真实挂载已在 Mac 验证。
 - Mac 本机 tmux 会话编排待实测；local 配置、锁、revision、依赖诊断和连接 Linux tmux 已通过。
@@ -219,3 +250,19 @@ darwin amd64/arm64 为对应架构 Mach-O。Linux amd64 与 Mac arm64 产物已�
 - IPv6 转发完成语法/规范化单元验证，真实数据转发实测使用 IPv4 回环地址。
 - SSH 诊断未知或本地化场景仍保守失败；未穷举所有 OpenSSH 版本、代理链和 MFA 方式。
 - HTTPS 下载已在隔离 TLS 源验证。HTTP 域名映射留待后续版本。
+
+## tmux session 命名（2026-11-08）
+
+新建项目会话使用 `tdev-project-<name>`，名称被无匹配 UUID 的会话占用时回退到 `tdev-project-<UUID>`（UUID 去掉连字符）。scratch 使用 `tdev-scratch-<name>`，省略名称时直接生成 UUID。真实隔离 tmux 回归通过，覆盖普通同名会话共存、占用名称保护与 UUID 回退、旧项目名和旧 UUID 名称及手工改名会话的复用、重复 UUID 保护、scratch 归属与自动命名。
+
+`go vet ./...`、`gofmt -l cmd internal`、`git diff --check`、四平台 `make cross`、`make build` 和 `go test -race ./internal/tmux` 通过。隔离 SSH/PTY 专项重跑中，项目列表与命名冲突、远端 scratch、本机 scratch、项目与 scratch 同名冲突、无需额外 session 状态查询的项目操作通过；本机项目与命名 shell 用例首次在 detach 后等待进程退出超时，单独重跑通过。
+
+此前完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 240s ./...` 曾因断线重连用例报告稳定连接未重置重试预算、后续 SSH 连接重置而超时；断线重连专项重跑通过。后续完整复验结果见下节。
+
+## 当前修改发布前复验（2026-11-08）
+
+Go 1.27.3、Linux amd64、tmux 3.6 环境下，`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，CLI 集成用时 123.485 秒，真实 tmux 测试用时 4.149 秒，安装升级测试用时 4.816 秒。测试使用临时配置、独立 tmux socket 和隔离系统 OpenSSH，覆盖连续两次断线重连、本机项目与命名 shell、项目及 scratch 命名、分屏布局、回环地址自动转发、签名升级、安装状态迁移、重复安装及两版回滚保留。
+
+`make check` 通过，包含 `go vet ./...`、`gofmt -l cmd internal`、`git diff --check` 和安装及 GitLab 构建脚本语法检查。`make cross` 完成 Linux/macOS 的 amd64/arm64 四平台构建，Go 构建信息与目标平台一致；Linux amd64 产物的 JSON version 返回 0.3.0，协议及配置 schema 均为 1。本轮保留现有源码版本，发布时需同步版本与发布说明。
+
+本轮完整测试通过，此前断线重连与 detach 退出的偶发失败仍保留为时序敏感性记录。macOS 原生交互、真实跨文件系统状态迁移及中断恢复、历史发行版回退后使用新版安装脚本重新升级等覆盖限制，见“尚未完成的环境或人工验收”。

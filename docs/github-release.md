@@ -20,7 +20,7 @@ gh secret set TDEV_SIGNING_KEY --repo JourneyBean/tdev < /secure/external/releas
 
 ```sh
 git push github main
-git push github v0.3.0
+git push github v0.4.0
 ```
 
 main 的测试通过后，版本标签流水线独立执行完整验收并构建发布。标签必须是无前导零的 `vMAJOR.MINOR.PATCH`，源码及构建版本需与标签一致。预发布标签在版本检查阶段拒绝。

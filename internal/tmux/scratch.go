@@ -64,7 +64,7 @@ func (m Manager) ScratchStatus(ctx context.Context, name string) (Scratch, error
 }
 func (m Manager) CreateScratch(ctx context.Context, name, dir string) (Scratch, error) {
 	if name == "" {
-		name = "scratch-" + config.NewID()
+		name = config.NewID()
 	}
 	if !config.ValidName(name) {
 		return Scratch{}, config.Invalid("invalid scratch name")

@@ -18,7 +18,7 @@ import (
 	"tdev/internal/tmux"
 )
 
-var Version = "0.3.0"
+var Version = "0.4.0"
 
 type app struct {
 	root        *cobra.Command

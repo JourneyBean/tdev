@@ -99,7 +99,7 @@ tdev upgrade
 tdev upgrade --rollback
 ```
 
-升级复用安装时保存的发布公钥和下载源，验证签名后替换二进制，保留旧版本备份。远端需要 Linux、SSH 和 tmux；文件挂载另需 SSHFS，macOS 需 macFUSE。
+升级复用安装时保存的发布公钥和下载源。安装与升级验证签名后比较二进制内容：相同内容保留原文件和已有回滚记录，内容变化时保存旧版本及其收据，再替换二进制。安装记录与备份统一存放在 `${XDG_STATE_HOME:-~/.local/state}/tdev/installations/<安装目标路径的 SHA256>/` 下的 `receipt.json` 和 `backups/`；XDG_STATE_HOME 使用绝对路径。新版安装或回滚时自动迁移旧记录及其引用的备份链，校验完成后清理旧路径。回退到仅支持旧收据路径的历史版本后，再次升级使用新版安装脚本。每个安装目标最多保留当前版本之前的两个版本，可连续回滚两次；成功安装或回滚后清理超出保留范围的备份。相同内容重复安装保留已有回滚记录。远端需要 Linux、SSH 和 tmux；文件挂载另需 SSHFS，macOS 需 macFUSE。
 
 ## v0.2.0 客户端与服务端
 
@@ -111,4 +111,4 @@ v0.2.0 增加本机诊断日志和 --debug，修复 zsh 登录 shell 下的目�
 
 v0.1.0 使用 tdev api 机器接口。连接旧版服务端时，客户端显示版本并提示升级；已登记服务器使用 `tdev upgrade --remote dev`。远端通过上传已验证候选二进制完成升级，原 API 无需先支持新协议。
 
-本机项目可直接创建，无需 setup。旧版自动生成名称的 tmux session 按项目 UUID 识别并复用；新 session 优先使用项目名称，同名普通会话存在时使用独立的 tdev-<UUID> 名称并提示 warning。
+本机项目可直接创建，无需 setup。旧版自动生成名称的 tmux session 按项目 UUID 识别并复用；新项目 session 使用 `tdev-project-<name>`，该名称被无匹配 UUID 的会话占用时使用 `tdev-project-<UUID>`（UUID 去掉连字符）并提示 warning。scratch 使用 `tdev-scratch-<name>`，省略名称时使用自动生成的 UUID。
