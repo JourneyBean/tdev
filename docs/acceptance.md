@@ -22,6 +22,10 @@ Bookworm 云端运行通过 SSH、CJK 与连续断线测试后，本机 scratch 
 
 原生执行环境为 Linux amd64，四平台完成交叉构建。macOS 原生交互、跨文件系统迁移、中断恢复等覆盖限制见“尚未完成的环境或人工验收”。
 
+2026-11-08：GitHub 的 [v0.4.0 发布流水线](https://github.com/JourneyBean/tdev/actions/runs/42503800547) 全部通过，云端 CLI 完整竞态集成用时 133.562 秒、真实 tmux 用时 6.046 秒、安装升级测试用时 5.626 秒。四平台签名包共 14 个附件已公开，Release 设为 latest。公开下载验证通过匿名版本下载地址校验可信公钥、Ed25519 签名、全部摘要及压缩包内容，并在临时目录在线安装 Linux amd64，JSON version 返回 0.4.0。公开流水线日志扫描未发现凭据或内部环境标识。
+
+同一提交的首次 main CI 在 `TestConcurrentEnsureSaveAndStop` 中报告 `tmux list-sessions: server exited unexpectedly`；[main CI 的完整重跑](https://github.com/JourneyBean/tdev/actions/runs/42503800626) 通过，发布标签的独立完整测试也通过，保留该偶发失败记录。
+
 ## v0.3.0 版本验收
 
 2026-11-08：默认构建、源码及发布说明统一为 0.3.0。完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 179 秒，包含真实隔离 SSH/tmux 分屏、保存恢复及诊断回归。`make check`、`make cross`、`make build` 通过；最终二进制 JSON version 返回 0.3.0、pane-layout-v1，协议及 schema 均为 1。四平台二进制格式及架构校验通过，新增内容、文件名与构建路径扫描未发现凭据或内部环境标识。原生执行环境为 Linux；macOS 原生交互、实际 FUSE 挂载及极小终端尺寸下布局恢复待对应环境验证。
