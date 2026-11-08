@@ -10,6 +10,8 @@ Last verified: 2026-11-08。源码版本：0.4.1。下表保留集成验收使�
 
 2026-11-08：默认构建、源码版本与发布说明统一为 0.4.1。`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，真实隔离 SSH/PTY 的 CLI 集成用时 134.853 秒、tmux 用时 6.573 秒、安装升级测试用时 8.102 秒，覆盖交互 shell 启动与继续输入、分屏、过期收据迁移和回滚、跨服务器列表文案及连续断线重连。`make check`、`make cross` 和 `make build` 通过；Linux amd64 构建的 JSON version 返回 0.4.1，协议及 schema 均为 1。公开文件与文件名扫描未发现凭据或内部环境标识。
 
+2026-11-08：GitHub 的 [v0.4.1 发布流水线](https://github.com/JourneyBean/tdev/actions/runs/42511212633) 全部通过，云端 CLI 完整竞态集成用时 168.360 秒、真实 tmux 用时 8.052 秒、安装升级测试用时 11.406 秒。四平台签名包共 14 个附件已公开，Release 设为 latest。匿名下载验证完成可信公钥、Ed25519 签名、全部摘要与压缩包内容校验，并在临时目录在线安装 Linux amd64，JSON version 返回 0.4.1。公开流水线日志扫描未发现凭据或内部环境标识。
+
 原生执行环境为 Linux amd64、Go 1.27.3、tmux 3.6；Linux/macOS amd64/arm64 四平台交叉构建通过。macOS 原生 shell、实际 nvm 配置、真实跨文件系统迁移与中断恢复等人工验收限制继续适用，见“尚未完成的环境或人工验收”。
 
 ## GitHub CI 与发布验收
