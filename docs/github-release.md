@@ -2,6 +2,8 @@
 
 `.github/workflows/release.yml` 在 main 推送及针对 main 的 PR 中运行静态检查和真实 SSH/tmux 竞态测试。推送稳定版本标签后，通过测试的同一提交构建 Linux/macOS 的 amd64/arm64 签名包并创建 GitHub Release。
 
+测试在 Go Bookworm 容器中以独立普通用户运行，使用 C.UTF-8 locale；构建及发布在 Ubuntu Runner 上执行。
+
 ## 配置签名
 
 在仓库 Settings → Secrets and variables → Actions 中添加 `TDEV_SIGNING_KEY`，内容为 `docs/release.pub` 对应的现有、未加密 PKCS8 Ed25519 私钥。GitHub Secret 保存 PEM 内容；GitLab File 变量保存密钥文件，两种配置沿用同一安装信任链。通过可信的本地文件设置该 secret；密钥保留在仓库之外。

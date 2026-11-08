@@ -23,7 +23,14 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    container: golang:1.27-bookworm
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       commit: ${{ steps.commit.outputs.sha }}
@@ -64,15 +71,19 @@ jobs:
           go-version-file: go.mod
       - name: Install integration dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends tmux openssh-server openssh-client openssl zsh
-          sudo install -d -m 0755 /run/sshd
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tmux openssh-server openssh-client openssl zsh
+          install -d -m 0755 /run/sshd
+          useradd --create-home --shell /bin/bash --password '*' developer
+          printf '%s\n' 'export LANG=C.UTF-8 LC_ALL=C.UTF-8' "PS1='\$ '" > /home/developer/.bashrc
+          chown developer:developer /home/developer/.bashrc
+          chown -R developer "$GITHUB_WORKSPACE"
       - name: Check and test
         env:
           TDEV_REQUIRE_INTEGRATION: '1'
         run: |
-          make check
-          go test -race -count=1 -timeout 240s ./...
+          runuser -u developer -- env PATH="$PATH" GOCACHE=/tmp/tdev-go-build GOMODCACHE=/tmp/tdev-go-mod make check
+          runuser -u developer -- env PATH="$PATH" GOCACHE=/tmp/tdev-go-build GOMODCACHE=/tmp/tdev-go-mod TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...
 
   release:
     needs: test

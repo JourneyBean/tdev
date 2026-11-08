@@ -8,7 +8,9 @@ Last verified: 2026-11-08。源码版本：0.3.0。下表保留集成验收使�
 
 2026-11-08：GitHub workflow 通过 actionlint v1.7.12 校验。临时夹具的 14 个用例覆盖稳定标签格式、前导零及注入字符串拒绝、源码版本一致性、缺失及错误签名密钥、调试日志限制、临时密钥清理、GitHub 下载及升级来源，以及上传失败时保持草稿状态；测试密钥均在临时目录生成并清理。
 
-完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 123 秒，包含真实隔离 SSH/tmux；`make check` 通过。原生执行环境为 Linux。GitHub 托管 Runner 执行、实际签名 Secret 接入及在线 Release 上传仍待云端验证；上传步骤的本地夹具使用模拟 gh，不涉及真实发布。
+完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成约 123 秒，包含真实隔离 SSH/tmux；`make check` 通过。原生执行环境为 Linux。上传步骤的本地夹具使用模拟 gh。
+
+首次 GitHub Ubuntu Runner 执行在终端标记断言失败，日志包含长提示符、非 UTF-8 显示和 tmux 重绘控制序列。测试任务改为 Go Bookworm 容器中的独立普通用户，使用 C.UTF-8 与简短提示符；完整真实终端测试继续执行。调整后的 workflow 通过 actionlint v1.7.12，Linux `make check` 与完整竞态集成回归通过，CLI 集成约 122 秒。云端测试、签名构建及公开附件需在目标 workflow 运行中核验。
 
 ## v0.3.0 版本验收
 

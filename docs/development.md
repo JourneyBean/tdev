@@ -6,6 +6,8 @@ Last verified: 2026-11-08。版本：0.3.0。历史集成验收使用开发版�
 
 GitHub Actions 在 main 推送、PR 及版本标签事件中运行静态检查和真实 SSH/tmux 竞态测试。发布任务仅接受稳定版本标签，核对源码、构建版本和发布说明，并按测试记录的提交 SHA 构建。workflow_dispatch 可指定已有标签，发布逻辑保存在 workflow 中，支持补发早于流水线的版本提交。
 
+测试任务使用与 GitLab 相同的 Go Bookworm 容器，在独立普通用户下执行，并显式使用 C.UTF-8 locale。隔离 Runner 的交互 shell 配置及 tmux 版本差异，保留完整真实 SSH、PTY、CJK 和连续断线测试。
+
 签名使用 Actions Secret 中的既有 PKCS8 Ed25519 密钥，先核对仓库公钥，再生成四平台签名包；临时密钥按步骤清理。发布前验证签名、摘要及安装脚本，固定上传 14 个文件，全部上传成功后公开草稿。测试任务只读，发布任务单独授予 contents: write；同一标签的执行串行化。现有 Release 保持原样，失败草稿由维护者检查后处理。配置步骤见 [GitHub Actions 发布](github-release.md)。
 
 ## v0.3.0 版本
