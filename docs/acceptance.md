@@ -10,6 +10,8 @@ Last verified: 2026-11-10。源码版本：0.5.0。下表保留集成验收使�
 
 原生环境为 Linux amd64、Go 1.27.3、tmux 3.6、OpenSSH 10.2。fish 未安装，对应子测试跳过；OpenSSH 10.3+ 的实际通道、macOS 原生交互与真实 FUSE 等限制见“尚未完成的环境或人工验收”。公开文件及待推送历史扫描未发现凭据、内部环境标识或私人页面引用；两处路径命中为通用测试示例。提交与标签使用公开 noreply 身份。
 
+2026-11-10：GitHub 的 [v0.5.0 发布流水线](https://github.com/JourneyBean/tdev/actions/runs/42668096233) 全部通过，云端 CLI 完整竞态集成 167.747 秒、真实 tmux 13.741 秒，CI 使用 tmux 3.3a。Linux/macOS amd64/arm64 四平台签名包共 14 个附件已公开，Release 设为 latest。匿名下载验证通过可信公钥、Ed25519 manifest 与 SHA256SUMS 签名、全部摘要及压缩包内容检查；临时在线安装的 Linux amd64 程序返回 0.5.0。公开发布与 CI 日志扫描未发现凭据或内部环境标识。
+
 2026-11-09：审计开始时工作区、暂存区及未跟踪文件均为空，验证对象为 `5546ef3`。重点复查本地 daemon、open 功能选择与 tmux 标题提醒，未发现确定的阻断问题。`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，含子测试共 238 项通过；CLI 115.301 秒、daemon 2.205 秒、真实隔离 tmux 8.557 秒。`make check`、四平台 `make cross` 和 `make build` 通过，构建产物 JSON version 返回 0.4.1、协议及 schema 均为 1。原生环境为 Linux amd64、Go 1.27.3、tmux 3.6，真实 SSH/PTY 与 tmux 使用临时配置及私有 socket。fish 未安装，对应 shell 路径子测试跳过；真实 FUSE、macOS 原生交互、终端焦点渲染及多客户端限制沿用下文验收边界。
 
 2026-11-09：标题提醒已接入托管项目与 scratch 的创建及附着路径。真实隔离 tmux/PTY 回归验证失焦当前窗口 bell、焦点恢复只清除当前窗口补充标记、其他窗口原生及补充提醒继续保留、逐窗口切换清除、聚焦时当前窗口 bell 沿用原生已读逻辑，以及 60 秒周期刷新下事件立即更新 OSC 标题。配置回归验证继承的全局 hook 保留、重复设置幂等、普通 session 与全局标题/hook 保持原状、scratch 自动设置。真实本机与隔离 SSH 的 CLI 附着回归验证旧托管 session 自动补齐、重新附着保留补充标记、焦点事件输入、bell 到 OSC 标题输出和聚焦后的多窗口提醒保留。
@@ -271,7 +273,7 @@ darwin amd64/arm64 为对应架构 Mach-O。Linux amd64 与 Mac arm64 产物已�
 
 - `ps` 已在 Linux、OpenSSH 10.2 下验证真实 master PID、操作分配、独立转发归属和远端汇总。OpenSSH 10.3+ 的实际通道报告目前覆盖格式解析与隐私过滤夹具，原生新版本、macOS、多跳代理、大量并发连接及长时间运行的快照负载待环境实测。SSHFS 仅展示已登记 helper PID，独立传输状态与通道未知。
 
-- 标题提醒已在 Linux tmux 3.6 的本机和 SSH/PTY 链路验证；macOS 切换应用/终端标签页的真实焦点上报、实际标题渲染、真实 agent bell、嵌套 tmux及其他 tmux 版本待实测。同 session 多客户端的焦点竞争未验证，补充状态按最近一次 session 焦点事件记录。已附着客户端在首次开启 server 级 `focus-events` 后需重新附着。
+- 标题提醒已在 Linux tmux 3.6 及 CI 的 tmux 3.3a 验证本机和 SSH/PTY 链路；macOS 切换应用/终端标签页的真实焦点上报、实际标题渲染、真实 agent bell、嵌套 tmux及其他 tmux 版本待实测。同 session 多客户端的焦点竞争未验证，补充状态按最近一次 session 焦点事件记录。已附着客户端在首次开启 server 级 `focus-events` 后需重新附着。
 
 - 状态迁移已在 Linux 本机与隔离 SSH 环境实测；macOS 已完成交叉构建，真实跨文件系统迁移及中断恢复待实测。历史发行版回退后通过新版安装脚本重新升级的完整流程待实测。
 
