@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "question": "同一远程目标的 tdev 操作能否共享常驻 SSH 连接？",
+  "report": ".summary-web/studies/ssh-connections/report.md",
+  "evidence": [
+    "docs/ssh-connection-reuse.md"
+  ]
+}

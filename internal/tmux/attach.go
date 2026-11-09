@@ -70,6 +70,9 @@ func (m Manager) Attach(ctx context.Context, p config.Project, session, generati
 	if s.SessionID != session || s.Generation != generation {
 		return protocol.Fail("SESSION_NOT_FOUND", 5, "original session ended; refusing to attach a replacement")
 	}
+	if err = m.configureAlerts(ctx, s.SessionID); err != nil {
+		return err
+	}
 	path, err := m.attachmentPath(token)
 	if err != nil {
 		return err

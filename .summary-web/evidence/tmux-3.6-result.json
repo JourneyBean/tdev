@@ -1,0 +1,96 @@
+{
+  "tmux": "tmux 3.6",
+  "stages": [
+    {
+      "stage": "initial",
+      "titles_emitted": [
+        "demo:observer"
+      ],
+      "alerts": "",
+      "windows": "0:agent-a bell=0 activity=0\n1:agent-b bell=0 activity=0\n2:observer bell=0 activity=0",
+      "client_focus": "xterm-256color focus=attached,focused"
+    },
+    {
+      "stage": "agent_a_bell",
+      "titles_emitted": [
+        "[!] demo:observer"
+      ],
+      "alerts": "0!",
+      "windows": "0:agent-a bell=1 activity=0\n1:agent-b bell=0 activity=0\n2:observer bell=0 activity=0",
+      "client_focus": "xterm-256color focus=attached,focused"
+    },
+    {
+      "stage": "agent_b_bell",
+      "titles_emitted": [],
+      "alerts": "0!,1!",
+      "windows": "0:agent-a bell=1 activity=0\n1:agent-b bell=1 activity=0\n2:observer bell=0 activity=0",
+      "client_focus": "xterm-256color focus=attached,focused"
+    },
+    {
+      "stage": "select_a",
+      "titles_emitted": [
+        "[!] demo:agent-a"
+      ],
+      "alerts": "1!",
+      "windows": "0:agent-a bell=0 activity=0\n1:agent-b bell=1 activity=0\n2:observer bell=0 activity=0",
+      "client_focus": "xterm-256color focus=attached,focused"
+    },
+    {
+      "stage": "select_b",
+      "titles_emitted": [
+        "demo:agent-b"
+      ],
+      "alerts": "",
+      "windows": "0:agent-a bell=0 activity=0\n1:agent-b bell=0 activity=0\n2:observer bell=0 activity=0",
+      "client_focus": "xterm-256color focus=attached,focused"
+    },
+    {
+      "stage": "current_window_bell",
+      "titles_emitted": [],
+      "alerts": "",
+      "windows": "0:agent-a bell=0 activity=0\n1:agent-b bell=0 activity=0\n2:observer bell=0 activity=0",
+      "client_focus": "xterm-256color focus=attached,focused"
+    },
+    {
+      "stage": "focus_out",
+      "titles_emitted": [],
+      "alerts": "",
+      "windows": "0:agent-a bell=0 activity=0\n1:agent-b bell=0 activity=0\n2:observer bell=0 activity=0",
+      "client_focus": "xterm-256color focus=attached"
+    },
+    {
+      "stage": "unfocused_current_window_bell",
+      "titles_emitted": [],
+      "alerts": "",
+      "windows": "0:agent-a bell=0 activity=0\n1:agent-b bell=0 activity=0\n2:observer bell=0 activity=0",
+      "client_focus": "xterm-256color focus=attached"
+    },
+    {
+      "stage": "focus_in",
+      "titles_emitted": [],
+      "alerts": "",
+      "windows": "0:agent-a bell=0 activity=0\n1:agent-b bell=0 activity=0\n2:observer bell=0 activity=0",
+      "client_focus": "xterm-256color focus=attached,focused"
+    },
+    {
+      "stage": "ordinary_output_with_activity_monitor",
+      "titles_emitted": [
+        "demo:observer",
+        "[!] demo:observer"
+      ],
+      "alerts": "0#",
+      "windows": "0:agent-a bell=0 activity=1\n1:agent-b bell=0 activity=0\n2:observer bell=0 activity=0",
+      "client_focus": "xterm-256color focus=attached,focused"
+    },
+    {
+      "stage": "select_activity_window",
+      "titles_emitted": [
+        "demo:agent-a"
+      ],
+      "alerts": "",
+      "windows": "0:agent-a bell=0 activity=0\n1:agent-b bell=0 activity=0\n2:observer bell=0 activity=0",
+      "client_focus": "xterm-256color focus=attached,focused"
+    }
+  ],
+  "pass": true
+}

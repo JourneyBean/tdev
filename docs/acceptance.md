@@ -1,8 +1,14 @@
 # 开发验收记录
 
-Last verified: 2026-11-08。源码版本：0.4.1。下表保留集成验收使用的开发版版本号。
+Last verified: 2026-11-09。源码版本：0.4.1。下表保留集成验收使用的开发版版本号。
 
 本记录汇总第一版核心功能的自动化验证、环境实测和待验证项。
+
+2026-11-09：标题提醒已接入托管项目与 scratch 的创建及附着路径。真实隔离 tmux/PTY 回归验证失焦当前窗口 bell、焦点恢复只清除当前窗口补充标记、其他窗口原生及补充提醒继续保留、逐窗口切换清除、聚焦时当前窗口 bell 沿用原生已读逻辑，以及 60 秒周期刷新下事件立即更新 OSC 标题。配置回归验证继承的全局 hook 保留、重复设置幂等、普通 session 与全局标题/hook 保持原状、scratch 自动设置。真实本机与隔离 SSH 的 CLI 附着回归验证旧托管 session 自动补齐、重新附着保留补充标记、焦点事件输入、bell 到 OSC 标题输出和聚焦后的多窗口提醒保留。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，CLI 集成 122.227 秒、真实 tmux 测试 8.382 秒。`go vet ./...`、`gofmt -l cmd internal`、`git diff --check` 与四平台 `make cross` 通过。原生执行环境为 Linux、tmux 3.6；焦点事件由 PTY 注入，真实终端和多客户端的覆盖限制见“尚未完成的环境或人工验收”。
+
+2026-11-09：标题提醒调研使用 Linux、tmux 3.6、独立临时 socket、`/dev/null` 配置及真实 PTY，记录 11 个阶段，7 项核心断言通过。A、B 后台窗口依次输出 BEL 后，session 提醒为 `0!`、`0!,1!`；切到 A 后保留 `1!` 和带 `[!]` 的 OSC 标题，切到 B 后提醒为空并发送普通标题。刷新间隔设为 60 秒，各后续阶段在 0.5 秒采集窗口内捕获事件更新；标题内容相同时省略重复发送。当前窗口在聚焦和失焦时输出 BEL 均未留下提醒；注入焦点进入/离开事件可改变 focused 标志。activity 监控下普通输出产生 `0#`，切换至该窗口清除。候选方案尚未接入 tdev；真实 agent 信号、外层终端渲染、SSH 全链路、嵌套 tmux、多客户端和其他版本待验证。本轮未修改 Go 产品代码，未重跑产品构建与 Go 测试。协议和原始结果保存在 `.summary-web/evidence/`。
 
 2026-11-08：`ls` 文本输出将尚未启动或已停止的项目状态显示为 `inactive`，JSON 与缓存沿用 `missing`。完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...` 通过，CLI 集成用时 128.087 秒、真实隔离 tmux 测试用时 3.998 秒；跨服务器列表集成验证新文案。`make check` 与 `make build` 通过。执行环境为 Linux，本次仅调整列表展示。
 
@@ -255,6 +261,8 @@ darwin amd64/arm64 为对应架构 Mach-O。Linux amd64 与 Mac arm64 产物已�
 
 ## 尚未完成的环境或人工验收
 
+- 标题提醒已在 Linux tmux 3.6 的本机和 SSH/PTY 链路验证；macOS 切换应用/终端标签页的真实焦点上报、实际标题渲染、真实 agent bell、嵌套 tmux及其他 tmux 版本待实测。同 session 多客户端的焦点竞争未验证，补充状态按最近一次 session 焦点事件记录。已附着客户端在首次开启 server 级 `focus-events` 后需重新附着。
+
 - 状态迁移已在 Linux 本机与隔离 SSH 环境实测；macOS 已完成交叉构建，真实跨文件系统迁移及中断恢复待实测。历史发行版回退后通过新版安装脚本重新升级的完整流程待实测。
 
 - Linux FUSE 挂载待实测；状态机和失败路径已有测试，真实挂载已在 Mac 验证。
@@ -310,3 +318,7 @@ Go 1.27.3、Linux amd64、tmux 3.6 下最终 `TDEV_REQUIRE_INTEGRATION=1 go test
 首轮完整回归发现交互冷连接在网络失败后额外执行认证尝试，已改为先查询热 master、冷连接在调用终端认证一次后交给 daemon。SSHFS 依赖测试原先在 daemon 启动后改变 PATH，现显式 restart 后验证新工具路径。恢复登记表的 race 已通过复制恢复快照修复。以上场景的专项及最终完整 race 回归均通过。
 
 `go vet ./...`、`gofmt -l cmd internal`、`git diff --check` 和 Linux/macOS amd64/arm64 四平台 `make cross` 通过。原生环境为 Linux；真实 FUSE/macOS 下的新 daemon 挂载生命周期、密码/MFA 和 GUI askpass、多跳代理、大量并发终端的 MaxSessions 边界、长时间休眠及传输性能仍待环境验收。SSHFS 在 daemon 与客户端同时异常结束后可能保留挂载，需按现有身份记录安全 unmount；忙碌时保留。web/HTTP 服务尚未实现，当前选择 web 会报告配置错误。
+
+## daemon 与 tmux 标题提醒组合验收（2026-11-09）
+
+合并本地连接监督、open 功能选择与 tmux 标题提醒后，`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过：CLI 112.672 秒、daemon 2.325 秒、真实隔离 tmux 8.397 秒。`make check` 和 Linux/macOS amd64/arm64 四平台 `make cross` 通过。标题提醒研究保留原入口；SSH 连接研究的 journal、快照及预览迁入 `.summary-web/studies/ssh-connections/`，原始记录字节核对一致。各功能的环境与人工验收边界继续适用。

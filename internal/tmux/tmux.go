@@ -166,6 +166,9 @@ func (m Manager) Ensure(ctx context.Context, p config.Project) (Status, error) {
 			return s, err
 		}
 	}
+	if err = m.configureAlerts(ctx, id); err != nil {
+		return s, err
+	}
 	for i, w := range p.Windows {
 		var wid string
 		if i == 0 {

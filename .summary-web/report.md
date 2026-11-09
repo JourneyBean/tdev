@@ -1,27 +1,35 @@
-# 同一远程目标的 tdev 操作能否共享常驻 SSH 连接？
+# tmux 原生提醒能否汇总到外层终端标题？
 
-## 当前答案
+可以。Linux tmux 3.6 的隔离真实 PTY 验证表明，session_alerts 能保留多个窗口提醒，并在逐个切换时分别清除；最后一个提醒清除后，终端收到去掉 `[!]` 的标题序列。原生能力已接入 tdev，并增加当前窗口失焦 bell 的补充标记；产品验证记录见 `docs/acceptance.md`。
 
-可以。已实现本地 daemon 管理连接，API、completion 与终端共享控制 master；forward、scp 与 SSHFS 保持独立传输。用户选择默认 open 的附属资源随 shell 退出释放，显式服务模式后台保留。
+## 原生方案与已实现扩展
 
-## 证据范围与限制
+对托管 session 设置：
 
-最初的源码评估已转为实现，行为与协议依据见 docs/ssh-connection-reuse.md。真实 SSH 连接计数、双窗口退出、重启和异常退出恢复均有专项测试；完整验证记录见 docs/acceptance.md。没有延迟或吞吐基准，真实 FUSE/macOS 新生命周期仍待环境验收。
-
-## 评估与实现路径
-
-```text
-常驻连接是否可行？→ 已实现本地监督与分功能连接
-  ├─ 初始源码审计：原实现按操作隔离 → docs/acceptance.md
-  ├─ 官方协议核对：动态转发和后台保留可用 → docs/ssh-connection-reuse.md
-  ├─ 实现与隔离 SSH 测试：共享控制连接和资源使用权 → docs/acceptance.md
-  └─ 后续环境验收：真实 FUSE/macOS、规模与性能 → docs/acceptance.md
+```sh
+tmux set-option set-titles on
+tmux set-option set-titles-string '#{?session_alerts,[!] ,}#S:#W'
 ```
 
-## 下一步
+标记代表整个 session 的原生窗口提醒，包括 bell、activity 和 silence。当前窗口失焦时收到 bell，由 tmux hook 记录补充标记；重新聚焦仅清除当前窗口标记，其他窗口提醒保留。agent hook 不在 MVP 范围。
 
-按验收边界验证真实挂载与大量并发终端；后续 HTTP 服务可接入已有 daemon，web 名称当前提前报错。
+## 调研步骤与结论
 
-## 发布形式
+```text
+问题：逐窗口清除能否只靠 tmux？
+  ├─ 原生聚合与 OSC 验证 → A/B 分别保留，切换逐个清除：通过
+  ├─ 焦点事件验证 → 可更新 focused 标志；当前窗口失焦 bell 仍不留标记
+  └─ activity 对照 → 普通输出也会提醒，需明确标记语义
+```
 
-现有 notebook 渲染器仅生成单页预览，详情保留在独立仓库文档中；预览中的本地文档引用显示为文本。未修改渲染器，未启动预览服务或外部发布。
+三个步骤的协议、观测和来源见[验证记录](evidence/findings.md)。原始记录为[11 阶段结果](evidence/tmux-3.6-result.json)，复现脚本为[隔离 PTY 协议](evidence/tmux-title-probe.py)。当前发布工具仅提供单页预览；证据文件独立保存，预览不提供细节页导航。
+
+## 证据边界
+
+本次捕获真实标题控制序列。刷新间隔设置为 60 秒，各后续阶段在 0.5 秒采集窗口内得到事件更新；7 项核心断言通过。后续工程测试已通过本机和真实隔离 SSH/PTY 全链路；真实终端渲染、真实 agent 信号、嵌套 tmux、多客户端焦点竞争和其他版本仍待验证。
+
+实现选择同步全部原生提醒，并用 tmux 自身 hook 补充失焦 bell。下一步在实际 macOS 终端验证应用切换、标签页切换和标题渲染。
+
+## 相关研究
+
+[本地 daemon 与 SSH 连接管理](studies/ssh-connections/report.md) 的原始 journal、快照和独立 HTML 预览保存在 studies/ssh-connections/。档案中的旧源路径保留原记录含义。产品行为及验收见 docs/ssh-connection-reuse.md 和 docs/acceptance.md。

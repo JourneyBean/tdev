@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-11-09T05:26:56.427660+00:00",
+  "kind": "publication",
+  "note": null,
+  "evidence": [],
+  "hashes": {
+    ".summary-web/report.md": "c186327bcba8fd01ae9322840510009ca82eca5cb3255f698bc76ccff148e565"
+  },
+  "revision": "f9adb8a1b2f039b52cf217533a724db80c4358ebf307cc0cf2c6547cac270d13",
+  "manifest": {
+    "version": 1,
+    "question": "tmux 原生提醒能否汇总到外层终端标题，并在逐个切换窗口后清除？",
+    "report": ".summary-web/report.md",
+    "evidence": []
+  },
+  "report": "# Question\ntmux 原生提醒能否汇总到外层终端标题，并在逐个切换窗口后清除？\n\n## Current answer\nNot established yet.\n\n## Status and limitations\nPlanned; evidence not yet collected.\n\n## Next unresolved question\nWhat evidence would distinguish the hypotheses?\n\n## Purpose and hypotheses\nRecord competing explanations before running.\n\n## Observations\nNo run recorded.\n\n## Interpretation\nNo conclusion yet.\n\n## Progression\nDates and changes go here; unknown historical dates stay unknown.\n\n## Evidence and protocol\nReference preserved source records and exact commands/settings.\n\n## Open questions\nDefine the next bounded experiment.\n"
+}
