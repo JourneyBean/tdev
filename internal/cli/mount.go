@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/text/unicode/norm"
 	"tdev/internal/config"
+	"tdev/internal/daemon"
 	"tdev/internal/mount"
 	"tdev/internal/protocol"
 )
@@ -72,6 +73,25 @@ func (a *app) mountProject(ctx context.Context, t target, p config.Project, path
 	}
 	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
+	}
+	if a.useDaemon && !a.daemonWorker {
+		t, err = daemonTarget(t)
+		if err != nil {
+			return nil, err
+		}
+		client, err := a.daemonClient(ctx)
+		if err != nil {
+			return nil, err
+		}
+		payload, err := json.Marshal(mountServiceRequest{Target: t, Project: p, Path: path})
+		if err != nil {
+			return nil, err
+		}
+		state, err := client.Call(ctx, daemon.Request{Op: "mount", Payload: payload, Owner: t.Lease})
+		if err != nil {
+			return nil, err
+		}
+		return state.Result, nil
 	}
 	result, err := mount.New(a.store).Mount(ctx, t.Name, p.Name, p.ID, t.Server.SSHAlias, p.Directory, path, t.SSH, func(ctx context.Context, token string) error {
 		b, err := a.call(ctx, t, nil, "mount-probe", p.Name, "--token", token)

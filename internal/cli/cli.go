@@ -21,15 +21,17 @@ import (
 var Version = "0.4.1"
 
 type app struct {
-	root        *cobra.Command
-	store       config.Store
-	json        bool
-	debug       bool
-	timeout     time.Duration
-	out, errOut io.Writer
-	in          io.Reader
-	reader      *bufio.Reader
-	sshConfig   string
+	root         *cobra.Command
+	store        config.Store
+	json         bool
+	debug        bool
+	timeout      time.Duration
+	out, errOut  io.Writer
+	in           io.Reader
+	reader       *bufio.Reader
+	sshConfig    string
+	useDaemon    bool
+	daemonWorker bool
 }
 
 func Execute(args []string, in io.Reader, out, errOut io.Writer) int {
@@ -37,7 +39,7 @@ func Execute(args []string, in io.Reader, out, errOut io.Writer) int {
 }
 
 func executeContext(parent context.Context, args []string, in io.Reader, out, errOut io.Writer) int {
-	a := &app{store: config.Store{Root: config.DefaultRoot()}, in: in, out: out, errOut: errOut}
+	a := &app{store: config.Store{Root: config.DefaultRoot()}, in: in, out: out, errOut: errOut, useDaemon: true}
 	r := &cobra.Command{Use: "tdev", Short: "Project workspaces over SSH and tmux", Long: "tdev provides user commands for project workspaces over SSH and tmux.\nUse tdev api for the machine interface invoked by clients on the target host.", TraverseChildren: true, SilenceUsage: true, SilenceErrors: true}
 	r.PersistentPreRunE = func(*cobra.Command, []string) error {
 		if a.timeout <= 0 {
@@ -63,6 +65,7 @@ func executeContext(parent context.Context, args []string, in io.Reader, out, er
 	}})
 	a.api()
 	a.client()
+	a.daemonCommands()
 	a.pathCommand()
 	a.completionCommands()
 	a.commandHelp()

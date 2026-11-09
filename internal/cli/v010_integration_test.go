@@ -367,6 +367,8 @@ func TestOpenMountIsExplicitAndStandaloneMountRemains(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", toolsDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// The supervisor resolves local tools from its startup environment.
+	executeBinary(t, binary, root, s.Config, "", 0, "daemon", "restart")
 	open := terminalCLI(t, binary, root, s.Config, "open", "dev/demo")
 	open.write(t, "printf 'OPEN_WITHOUT_MOUNT\\n'\r")
 	open.waitText(t, "OPEN_WITHOUT_MOUNT\r\n")

@@ -33,6 +33,7 @@ type Record struct {
 	ActualSource     string `json:"actual_source"`
 	ProcessPID       int    `json:"process_pid,omitempty"`
 	Log              string `json:"log,omitempty"`
+	Reused           bool   `json:"-"`
 }
 type Manager struct {
 	Store     config.Store
@@ -115,6 +116,7 @@ func (m Manager) Mount(ctx context.Context, server, projectName, projectID, alia
 	if live, ok := find(entries, r.Path); ok {
 		old, err := m.record(r.Path)
 		if err == nil && match(old, live) && old.Source == r.Source && old.ProjectID == projectID && old.Server == server {
+			old.Reused = true
 			return old, nil
 		}
 		if live.Source == r.Source {

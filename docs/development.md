@@ -1,6 +1,12 @@
 # 开发记录与实现取舍
 
-Last verified: 2026-11-08。版本：0.4.1。历史集成验收使用开发版版本号，见验收记录。
+## 本地 daemon 与功能选择
+
+本地 daemon 通过私有 Unix socket 管理控制连接、后台转发及 SSHFS 启动。API、completion 与交互终端共享控制 master；转发、scp 和 SSHFS 使用独立传输。daemon 生命周期锁、逐目标获取锁及独立代次 socket 协调多进程和重连；首次交互认证在调用终端完成，后台使用 BatchMode。
+
+默认 open 的附属资源随 shell 退出释放；多个窗口共享使用权，最后一个退出才清理临时资源。显式服务模式 `open --only forward/sshfs` 后台保留。存续请求断开会回收异常退出客户端的使用权；挂载沿用身份核对与安全卸载。daemon restart 恢复后台转发和活跃 open 的使用权；stop 保持停止，start 恢复。后续 web 功能保留入口并在执行前报告尚未实现。行为、隐私边界及运维细节见 [本地 daemon 与 SSH 连接管理](ssh-connection-reuse.md)。
+
+Last verified: 2026-11-09。版本：0.4.1。历史集成验收使用开发版版本号，见验收记录。
 
 ## GitHub CI 与发布
 
@@ -106,7 +112,7 @@ ls 并发刷新，每台服务器的版本与项目/会话查询合并为一次 
 
 create、open 缺失项目和 edit 使用同一份草稿向导。目录、窗口和映射全部收集并验证，最终确认后再写入；完整创建通过 api project create --stdin 原子完成。edit 预填原值并携带原 revision。L 映射的服务地址一次输入 host:port，客户端监听差异按 UUID 和 forward ID 保存在 overrides.yaml。保存定义与保存 override 的部分失败分别报告。
 
-新建项目 tmux session 使用 `tdev-project-<name>`，UUID 标记验证归属并支持复用旧名称的会话，保留原 session ID 和连接。新项目窗口 main；sh --name 指定新窗口名称，默认 shell。open 默认只建立会话、转发和终端；--mount 显式挂载，独立 mount/unmount 保留。挂载路径按项目 UUID 保存在本机 override；open 退出后挂载保留。本机项目直接进入 tmux，转发用本地 TCP listener，文件传输复用暂存与哈希校验。
+新建项目 tmux session 使用 `tdev-project-<name>`，UUID 标记验证归属并支持复用旧名称的会话，保留原 session ID 和连接。新项目窗口 main；sh --name 指定新窗口名称，默认 shell。open 默认只建立会话、转发和终端；--mount 显式挂载，独立 mount/unmount 保留。挂载路径按项目 UUID 保存在本机 override；带 shell 的 open 退出时释放本次新建挂载；预先存在及其他使用者所需挂载保留。本机项目直接进入 tmux，转发用本地 TCP listener，文件传输复用暂存与哈希校验。
 
 ## v0.0.3 连接向导与配置发现
 
@@ -146,8 +152,7 @@ config，避免把用户 config 中保存的其他转发也提交给本次 maste
 保留 SSH alias 的连接、认证和 ProxyJump 等能力；不接管用户已有 ControlMaster。
 
 映射分别监督并使用 forward 重连策略。冲突不会杀死其他监听，保存定义与实际连接状态
-分别报告。退出时取消自己的映射并关闭自己的连接，随后删除控制 socket。
-open 期间的事件写私有 JSONL 日志，交互终端不接收后台转发提示。
+分别报告。前台 forward 退出时取消自己的映射并关闭连接，随后删除控制 socket。open 的映射由 daemon 按使用权管理，后台状态通过 daemon status 查询。
 ready 表示 SSH 监听已建立；应用健康由应用自身检查。
 
 ## 终端重连

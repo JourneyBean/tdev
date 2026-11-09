@@ -68,7 +68,21 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 		if current.Status != "running" || current.Generation == "" || current.Generation != original.Generation || current.SessionID != original.SessionID {
 			return protocol.Fail("SESSION_NOT_FOUND", 5, "original session ended; reconnect will not recreate it or enter a replacement")
 		}
-		m, e := sshx.Start(ctx, t.Server.SSHAlias, t.SSH, t.Batch)
+		token := "a" + config.NewID()
+		command := remoteCommand(t, "api", sessionGroup, "attach", t.Project, "--session-id", current.SessionID, "--generation", current.Generation, "--token", token)
+		if window != "" {
+			command += " --window " + tmux.Quote(window)
+		}
+		var m *sshx.Master
+		var args []string
+		if a.useDaemon {
+			args, e = a.remoteArgs(ctx, t, true, command)
+		} else {
+			m, e = sshx.Start(ctx, t.Server.SSHAlias, t.SSH, t.Batch)
+			if e == nil {
+				args = m.Args(true, command)
+			}
+		}
 		if e != nil {
 			if reconnect.Retryable(e) {
 				failed = true
@@ -76,18 +90,18 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 			}
 			return e
 		}
-		token := "a" + config.NewID()
-		command := remoteCommand(t, "api", sessionGroup, "attach", t.Project, "--session-id", current.SessionID, "--generation", current.Generation, "--token", token)
-		if window != "" {
-			command += " --window " + tmux.Quote(window)
+		closeOwned := func() {
+			if m != nil {
+				m.Close()
+			}
 		}
-		cmd := sshx.Command(ctx, "ssh", m.Args(true, command)...)
+		cmd := sshx.Command(ctx, "ssh", args...)
 		cmd.Stdin = a.in
 		cmd.Stdout = a.out
 		cmd.Stderr = a.errOut
 		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 		if e = cmd.Start(); e != nil {
-			m.Close()
+			closeOwned()
 			return e
 		}
 		// Readiness is a structured query of the actual tmux client PID, not a TCP/probe success.
@@ -122,12 +136,14 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 		default:
 		}
 		var transportErr error
-		select {
-		case <-m.Closed():
-			transportErr = m.Err()
-		default:
+		if m != nil {
+			select {
+			case <-m.Closed():
+				transportErr = m.Err()
+			default:
+			}
 		}
-		m.Close()
+		closeOwned()
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

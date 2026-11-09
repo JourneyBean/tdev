@@ -1,0 +1,20 @@
+{
+  "timestamp": "2026-11-09T05:10:30.659716+00:00",
+  "kind": "finding",
+  "note": "源码与官方手册确认共享传输及动态转发可行；现有独立连接模式完整 race/SSH/tmux 回归通过。共享模式及性能尚未验证。",
+  "evidence": [
+    "docs/ssh-connection-reuse.md"
+  ],
+  "hashes": {
+    ".summary-web/report.md": "07c64050a430bb694229ebedd9f173158a0616fb9fcd6a69a824be22f8dab1d5",
+    "docs/ssh-connection-reuse.md": "49c8e846efd5753601952be8ed2b092eeec1e6fa52ce24315ca5258b258537ac"
+  },
+  "revision": "28d964d15a809d9d1cc3321820bfbe111c1f7c8957eeaa5e3e6367cf8bba7a17",
+  "manifest": {
+    "version": 1,
+    "question": "同一远程目标的 tdev 操作能否共享常驻 SSH 连接？",
+    "report": ".summary-web/report.md",
+    "evidence": []
+  },
+  "report": "# 同一远程目标的 tdev 操作能否共享常驻 SSH 连接？\n\n## 当前答案\n\n可以通过系统 OpenSSH ControlMaster 实现。当前实现按操作隔离连接，需补充跨进程创建锁、传输代次、转发使用权及重建协调。新项目可动态增加 L/R 转发；completion 可使用热连接。建议优先共享并允许必要时额外连接。\n\n## 证据范围与限制\n\n2026-11-09 完成源码评估并核对 OpenSSH、SSHFS 官方手册。功能覆盖、依据及待验项目见 docs/ssh-connection-reuse.md。共享连接尚未实现，没有复用延迟或吞吐测量。\n\n## 评估路径\n\n```text\n共享常驻 SSH 是否可行？→ 可行，需客户端协调\n  ├─ 源码审计：当前按操作隔离 → docs/ssh-connection-reuse.md\n  ├─ 官方协议核对：动态转发、后台保留可用 → docs/ssh-connection-reuse.md\n  ├─ 现有真实 SSH/tmux 回归：验证现有行为 → docs/acceptance.md\n  └─ 后续共享模式验证：尚未执行 → docs/ssh-connection-reuse.md\n```\n\n## 下一步\n\n先实现连接获取/释放、创建锁、代次和按需重连，接入 API/completion/attach；再增加转发租约和恢复，最后接入 scp/SSHFS。后台隧道持续在线的监督需求单独处理。\n\n## 发布形式\n\n现有 notebook 渲染器仅生成单页预览，详情保留在独立仓库文档中，预览中的本地文档引用仅显示为文本。未修改渲染器，未启动服务或外部发布。\n"
+}

@@ -198,7 +198,15 @@ func (a *app) shell(ctx context.Context, t target, command string) (data []byte,
 	defer func() { _, _ = a.recordDiagnostic("shell", t.Name, started, resultErr, exitCode) }()
 	ctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
-	cmd := sshx.Command(ctx, "ssh", append(t.SSH.Args(t.Batch), "-T", t.Server.SSHAlias, command)...)
+	var args []string
+	var err error
+	if !t.Local {
+		args, err = a.remoteArgs(ctx, t, false, command)
+		if err != nil {
+			return nil, err
+		}
+	}
+	cmd := sshx.Command(ctx, "ssh", args...)
 	if t.Local {
 		cmd = sshx.Command(ctx, "sh", "-c", command)
 	}

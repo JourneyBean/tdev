@@ -5,7 +5,7 @@
 复用系统 OpenSSH 和 tmux，远端无需数据库、HTTP API 或常驻 tdev 服务。
 
 当前源码版本为 `0.4.1`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
-挂载、签名安装升级和回滚。设计基线见[产品与技术设计](docs/design.md)，实现取舍见
+挂载、本地连接 daemon、功能选择、签名安装升级和回滚。设计基线见[产品与技术设计](docs/design.md)，实现取舍见
 [开发记录](docs/development.md)，实际通过与尚未实测的场景见[第一版验收记录](docs/acceptance.md)。
 版本变更见[发布说明](docs/releases/v0.4.1.md)。二进制 Release 位于
 [GitHub](https://github.com/JourneyBean/tdev/releases)。
@@ -63,6 +63,21 @@ tdev ls --server dev              # 指定服务器
 tdev create dev/demo              # 交互配置远端项目
 tdev open dev/demo
 ```
+
+本地 daemon 按需启动，API、补全与终端复用控制连接；转发及 SSHFS 使用独立连接。
+
+```sh
+tdev daemon start                  # 幂等启动
+tdev daemon status
+tdev daemon restart
+tdev daemon stop                   # 保持停止，start 恢复
+tdev open dev/demo --only shell
+tdev open dev/demo --only forward  # 后台保留转发，启动后返回
+tdev open dev/demo --only sshfs    # 使用已配置挂载路径；交互时可询问路径
+tdev open dev/demo --only forward,sshfs
+```
+
+默认 `open` 启动 shell 和 forward，`--mount` 额外启动 SSHFS；shell 退出时释放本次附属资源，其他窗口仍使用的资源保留。只选 forward/sshfs 时后台保留，转发通过 daemon stop 结束，挂载通过 unmount 安全卸载。web 等待后续 HTTP 服务实现。详见[连接管理](docs/ssh-connection-reuse.md)。
 
 完整标识为 `server/project`。裸名称先查本机，再按服务器名称排序查找远端；自动匹配时显示完整目标。缓存命中的目标离线时报告错误。裸名称 create 默认在本机创建；不带项目名的 create 向导先选择位置，本机为默认项。
 
@@ -278,8 +293,7 @@ tdev forward demo
 建立后才报告 ready。端口冲突不接管其他连接，失败和重连互相隔离。
 `forward add/remove` 保存或移除共享定义，`override` 调整当前客户端的监听参数。`forward <项目>` 使用保存的映射；显式 -L/-R 只为本次运行建立监听。项目参数始终按项目名解析，包括纯数字名称。
 
-前台 forward 和 open 的隧道归当前进程所有，退出时取消自己的映射和连接。
-open 期间的后台诊断写入私有 `runtime/logs/open-*.jsonl`，不会插入交互终端。
+前台 forward 的隧道归当前命令所有。open 的转发由 daemon 管理，带 shell 时按使用权释放，只选 forward 时后台保留。后台状态通过 `tdev daemon status` 查询。
 ready 表示 SSH 监听已建立；应用健康由应用自身检查。
 
 ## 传输与挂载
@@ -298,7 +312,7 @@ tdev unmount dev/demo ./empty-mountpoint
 逐文件原子替换；提交前检查目标是否变化。目录按文件提交，部分失败时报告已提交进度。
 第一版拒绝符号链接和设备文件；Mac 目标会在写入前拒绝大小写或 Unicode 规范化重名。
 
-open 默认只进入终端并建立转发。显式 `--mount` 或独立 mount 才挂载，路径保存为本机 override，可通过 `override --mount-path` 配置。再次 mount 可省略路径。挂载在退出 open 后保留，通过 unmount 显式释放。本机项目的 mount 返回已有项目目录。
+open 默认只进入终端并建立转发。显式 `--mount` 或独立 mount 才挂载，路径保存为本机 override，可通过 `override --mount-path` 配置。再次 mount 可省略路径。带 shell 的 open 在退出时释放本次新建挂载；已有挂载、其他窗口所需挂载和独立 mount 继续保留，通过 unmount 显式释放。本机项目的 mount 返回已有项目目录。
 
 挂载检查目录内容、实际来源和文件系统 ID；复用正确来源，不覆盖其他挂载。
 外部已有挂载可以复用，但不会被自动接管。unmount 使用本地记录，断网时也可操作；

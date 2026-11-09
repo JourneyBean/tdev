@@ -96,6 +96,18 @@ func (a *app) workspaceCommands() {
 		}
 	}
 	open := &cobra.Command{Use: "open <name>", Short: "Open a project workspace or an existing scratch session", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+		selected, err := features(c)
+		if err != nil {
+			return err
+		}
+		if !selected.shell {
+			t, err := a.resolveOpen(c.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			data, err := a.openServices(c.Context(), t, selected)
+			return a.result(data, err)
+		}
 		if a.json || !terminalAvailable(a.in) {
 			return config.Invalid("open requires an interactive terminal")
 		}
@@ -176,8 +188,8 @@ func (a *app) workspaceCommands() {
 		}
 		if t.Scratch {
 			doMount, _ := c.Flags().GetBool("mount")
-			if doMount {
-				return config.Invalid("--mount requires a project")
+			if doMount || selected.sshfs {
+				return config.Invalid("sshfs requires a project")
 			}
 			if out, ok := a.out.(*os.File); ok && terminalAvailable(out) {
 				if _, err = fmt.Fprintf(out, "\x1b]2;tdev: %s/%s\x07", t.Name, t.Project); err != nil {
@@ -189,17 +201,33 @@ func (a *app) workspaceCommands() {
 		if s.Warning != "" {
 			fmt.Fprintf(a.errOut, "warning: %s\n", s.Warning)
 		}
-		doMount, _ := c.Flags().GetBool("mount")
-		if doMount {
+		if a.useDaemon && ((selected.forward && len(automaticForwards(t, p.Forwards)) > 0) || (selected.sshfs && !t.Local)) {
+			owner, cleanup, leaseErr := a.daemonLease(c.Context(), a.restoreOpenServices(t, p, selected))
+			if leaseErr != nil {
+				return leaseErr
+			}
+			t.Lease = owner
+			defer cleanup()
+		}
+		if selected.sshfs {
 			if _, err = a.mountProject(c.Context(), t, p, ""); err != nil {
 				return err
 			}
 		}
-		closeForwards, err := a.openForwards(c.Context(), t, p.Forwards)
-		if err != nil {
-			return err
+		if selected.forward {
+			if a.useDaemon {
+				if _, err = a.daemonForwards(c.Context(), t, p.Forwards); err != nil {
+					// Existing open semantics keep the terminal usable when a forward fails.
+					fmt.Fprintln(a.errOut, "Forward unavailable:", err)
+				}
+			} else {
+				closeForwards, err := a.openForwards(c.Context(), t, p.Forwards)
+				if err != nil {
+					return err
+				}
+				defer closeForwards()
+			}
 		}
-		defer closeForwards()
 		if out, ok := a.out.(*os.File); ok && terminalAvailable(out) {
 			if _, err = fmt.Fprintf(out, "\x1b]2;tdev: %s/%s\x07", t.Name, t.Project); err != nil {
 				return err
@@ -210,6 +238,8 @@ func (a *app) workspaceCommands() {
 	a.root.AddCommand(open)
 	retryFlags(open)
 	open.Flags().Bool("mount", false, "mount the project directory before attaching")
+	open.Flags().StringSlice("only", nil, "open selected features: shell,forward,sshfs (comma-separated; web is reserved)")
+	_ = open.RegisterFlagCompletionFunc("only", completeOpenFeatures)
 	doctor := a.command(a.root, "doctor [project]", "Diagnose project warnings, versions and dependencies", cobra.MaximumNArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
 		local := a.clientDoctor()
 		if len(args) == 0 {

@@ -24,6 +24,7 @@ type Options struct {
 	ConnectTimeout      time.Duration `yaml:"connect_timeout"`
 	ServerAliveInterval time.Duration `yaml:"server_alive_interval"`
 	ServerAliveCountMax int           `yaml:"server_alive_count_max"`
+	MasterDirectory     string        `yaml:"-" json:"-"`
 }
 
 func Defaults() Options {
@@ -94,7 +95,11 @@ func Start(ctx context.Context, alias string, opts Options, batch bool) (*Master
 	if _, err := exec.LookPath("ssh"); err != nil {
 		return nil, protocol.Fail("DEPENDENCY_MISSING", 7, "OpenSSH ssh is required")
 	}
-	dir, err := os.MkdirTemp("/tmp", "tdev-ssh-")
+	baseDir := opts.MasterDirectory
+	if baseDir == "" {
+		baseDir = "/tmp"
+	}
+	dir, err := os.MkdirTemp(baseDir, "tdev-ssh-")
 	if err != nil {
 		return nil, err
 	}

@@ -133,7 +133,11 @@ func (a *app) calls(ctx context.Context, t target, input []byte, operations ...[
 		argv := append([]string{"--json", "--timeout", a.timeout.String(), "api"}, args...)
 		script += remoteCommand(t, argv...) + "; tdev_rc=$?; printf '\\n" + marker + " %s\\n' \"$tdev_rc\"; test \"$tdev_rc\" -eq 0 || exit \"$tdev_rc\"; "
 	}
-	cmd := sshx.Command(ctx, "ssh", append(t.SSH.Args(t.Batch), "-T", t.Server.SSHAlias, script)...)
+	sshArgs, err := a.remoteArgs(ctx, t, false, script)
+	if err != nil {
+		return nil, err
+	}
+	cmd := sshx.Command(ctx, "ssh", sshArgs...)
 	cmd.Stdin = bytes.NewReader(input)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

@@ -62,6 +62,7 @@ type target struct {
 	InstallApproved bool
 	SSH             sshx.Options
 	Reconnect       reconnect.Policies
+	Lease           string
 }
 
 func defaultPreferences() preferences {

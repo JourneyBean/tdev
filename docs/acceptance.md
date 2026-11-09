@@ -292,3 +292,21 @@ Go 1.27.3、Linux amd64 下 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -
 pane 启动普通 tmux shell，通过 literal `send-keys` 和独立 Enter 执行声明命令。隔离 tmux 回归覆盖单窗口与分屏、交互初始化中定义的工具、延迟初始化、引号和 shell 元字符原样传递、命令结束后继续使用 shell。布局测试同时核对实际文件写入及 pane 退出状态，避免把输入回显当作命令完成。
 
 Go 1.27.3、Linux amd64、tmux 3.6 下最终 `TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 300s ./...` 全部通过，隔离 SSH/PTY 集成用时 125.013 秒，tmux 用时 6.856 秒。`make check`、四平台 `make cross` 和 `make build` 通过。验证使用私有配置与 socket；macOS 原生 shell 和用户实际 nvm 配置的人工体验仍待验证。
+
+## SSH 连接复用评估（2026-11-09）
+
+本轮仅增加架构评估和本地 Answer Book，运行时行为保持当前实现。`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过：CLI 120.146 秒、forward 1.919 秒、tmux 5.677 秒。真实 SSH/PTY 与 tmux 使用临时配置及私有 socket；覆盖现有 L/R 转发、监听冲突保护、断线恢复、取消清理及终端重连。`go vet ./...`、`gofmt -l cmd internal`、`git diff --check` 通过。仅文档修改，无平台相关代码变更，未重复交叉构建。
+
+共享单传输尚未实现；并发冷启动的连接计数、共享映射释放、崩溃租约回收、旧代次清理、MaxSessions 耗尽、共享 SSHFS 恢复和大流量交互延迟仍待后续验收。评估依据与方案见 [SSH 连接复用评估](ssh-connection-reuse.md)。
+
+## 本地 daemon 与 open 功能选择（2026-11-09）
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过：CLI 110.863 秒、daemon 2.316 秒、forward 1.993 秒、tmux 6.458 秒。测试使用临时配置、生成的 SSH 身份、隔离 OpenSSH 和私有 tmux socket。随后修改的逗号列表补全通过专项 race 测试，CLI 1.064 秒。
+
+真实 SSH 专项核对十六个并发获取返回同一控制 socket、仅新增一条 TCP 连接；多个命令 channel 继续复用；转发另外建立连接，重复请求共享原监听。故障注入覆盖控制及转发恢复、后台转发登记的重启恢复。真实 CLI/PTY 覆盖并发冷启动幂等、热连接 completion 零新增 TCP、双窗口使用权、最后一个 shell 退出清理、活跃 shell 与转发跨 daemon restart 恢复、仅 shell 模式、显式后台转发保留、daemon 强制结束后的旧 master 清理与恢复，以及 stop 后 completion 保持 daemon 停止。
+
+挂载受控后端验证多窗口最后释放、已有挂载保留、busy 安全失败及 warning、异常退出留下的临时挂载标记恢复。服务模式支持非交互及 JSON，已有项目仅打开 forward 时不创建 tmux session；未知功能、空列表、参数冲突及 web 在操作前失败。
+
+首轮完整回归发现交互冷连接在网络失败后额外执行认证尝试，已改为先查询热 master、冷连接在调用终端认证一次后交给 daemon。SSHFS 依赖测试原先在 daemon 启动后改变 PATH，现显式 restart 后验证新工具路径。恢复登记表的 race 已通过复制恢复快照修复。以上场景的专项及最终完整 race 回归均通过。
+
+`go vet ./...`、`gofmt -l cmd internal`、`git diff --check` 和 Linux/macOS amd64/arm64 四平台 `make cross` 通过。原生环境为 Linux；真实 FUSE/macOS 下的新 daemon 挂载生命周期、密码/MFA 和 GUI askpass、多跳代理、大量并发终端的 MaxSessions 边界、长时间休眠及传输性能仍待环境验收。SSHFS 在 daemon 与客户端同时异常结束后可能保留挂载，需按现有身份记录安全 unmount；忙碌时保留。web/HTTP 服务尚未实现，当前选择 web 会报告配置错误。

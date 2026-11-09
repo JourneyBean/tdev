@@ -46,9 +46,8 @@ tdev 是通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量�
 ```text
 本地 tdev
   ├─ setup、项目选择、用户确认
-  ├─ 系统 OpenSSH → 远端 tdev api → 配置文件与 tmux
-  ├─ 系统 OpenSSH -t → 远端 tmux attach
-  ├─ 系统 OpenSSH -N → 端口转发
+  ├─ 本地 daemon → 共享 OpenSSH master → 远端 tdev api 与 tmux attach
+  ├─ 本地 daemon → 独立 OpenSSH -N → 端口转发
   ├─ 文件传输、SSHFS 挂载
   └─ 后续本地 HTTP 代理
 ```
@@ -102,11 +101,12 @@ yes | tdev save
 | 命令 | 行为 |
 | --- | --- |
 | tdev setup | 交互配置连接、密钥认证和重连偏好；检查或安装远端 tdev |
+| tdev daemon start/restart/stop/status | 管理本地连接监督进程及托管资源 |
 | tdev ls [--server NAME] [--json] | 遍历全部已配置服务器的项目和会话状态，可指定单台服务器 |
 | tdev create [server/project] | 创建项目，配置目录、启动窗口和映射 |
 | tdev show <project> | 显示定义、客户端 override 和生效配置 |
 | tdev edit <project> | 复用创建向导，预填现有值并检查 revision 保存 |
-| tdev open <name> [--mount] | 打开项目或恢复 scratch；项目恢复保存转发，--mount 用于项目挂载 |
+| tdev open <name> [--mount] [--only FEATURES] | 打开项目或恢复 scratch；按需选择 shell、forward、sshfs |
 | tdev save [project] [-y] | 从运行会话保存窗口结构、目录和已知启动定义 |
 | tdev sh [project] [--name NAME] [--save] [-y] | 新建项目 shell 窗口，可同时保存定义 |
 | tdev forward [project] [-L SPEC] [-R SPEC] | 启动保存的映射或本次临时映射 |
@@ -141,9 +141,11 @@ doctor、version、unmount、upgrade 是实现默认补充接口。第一版不�
 1. 解析服务器与项目，检查远端协议兼容性，实时获取项目定义并合并本机 override。
 2. 调用 session ensure：存在则返回实际会话；不存在则按配置创建。
 3. 在本地建立保存的转发；冲突只影响对应入口，明确显示失败。
-4. 指定 --mount 时挂载项目目录，复用本机 override 中的路径；未配置时询问。独立 mount/unmount 保留，open 退出后挂载保留。
+4. 指定 --mount 时挂载项目目录，复用本机 override 中的路径；未配置时询问。open 为本次新建挂载持有使用权，退出后安全卸载；已有挂载和其他使用者所需挂载继续保留。独立 mount/unmount 保留。
 5. 恢复终端状态，本机直接连接 tmux，远端交给系统 ssh -t。
 6. 正常 detach 则结束该次 open；异常断线进入重连状态机。
+
+`--only shell,forward,sshfs` 按逗号分隔选择功能；省略时选择 shell+forward，`--mount` 额外选择 sshfs。选中 shell 时附属资源随本次 open 释放，只选择 forward/sshfs 时启动后返回并后台保留，可使用 JSON。服务模式读取已有项目定义，不调用 session ensure。web 为后续 HTTP 服务保留，当前选择时提前报错。
 
 交互终端中，open 遇到尚未配置的项目时询问是否创建，填写项目所在机器的已有目录、按需配置窗口与映射后继续打开，新项目默认窗口 main。拒绝保留 PROJECT_NOT_FOUND，Ctrl-C 取消；连接或配置错误按原错误返回。也可从客户端运行 `tdev create`。setup 发现零项目时提供立即创建入口。`ls/show/edit` 和 `forward add/remove` 管理项目定义，复用原子写入、revision 和备份机制。本机端口偏好继续使用 override。
 
@@ -213,11 +215,13 @@ tdev forward demo
 
 `forward <项目>` 只负责建立和维持监听；显式 -L/-R 为临时映射。定义保存与监听运行分别操作。反向映射将流量送到成功建立监听的客户端，多客户端可能争用同一个远端端口。
 
-### 5.3 第一版连接所有权
+### 5.3 连接所有权
 
-实现默认决策：显式 forward 在前台运行，Ctrl-C 终止本次转发。open 创建的转发由本次 open 进程管理，正常退出或取消重连时清理自己创建的连接。保存定义继续保留。暂不引入全局后台转发 daemon。
+本地 daemon 由 `tdev daemon start|restart|stop|status` 管理，按需启动。API、completion 与终端共享控制 master；每条映射使用独立 master，相同配置及映射共享监听。显式 forward 继续在前台运行，Ctrl-C 终止本次转发。
 
-重复建立同一监听的连接不得杀死现有进程。如果无法证明监听属于本次操作，报告占用；对外部 SSH 或其他客户端的隧道不做接管。第一版可以将每条映射分为独立 SSH 进程，以准确隔离与报告单项失败，后续再优化连接复用。
+带 shell 的 open 持有附属资源使用权，最后一个使用者退出才停止临时映射；客户端异常退出通过存续 socket 断开触发回收。只选择 forward 的 open 后台保留监听。相同监听、不同目标报告占用；对外部 SSH 或其他客户端的隧道不做接管。保存定义继续保留。
+
+restart 保留后台转发登记并恢复连接；stop 关闭控制连接与托管转发、清除恢复登记并保持停止，start 恢复使用。显式保留的 SSHFS 使用 unmount 安全卸载。逐目标连接锁、代次与资源释放规则见 [连接管理](ssh-connection-reuse.md)。
 
 SSH 进程设置合理的 keepalive、ConnectTimeout 和 ExitOnForwardFailure。后者只确认转发监听建立，不表示目标应用健康。保存 -R 不改变 sshd 允许的绑定范围。
 

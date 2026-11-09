@@ -24,6 +24,7 @@ import (
 	"github.com/creack/pty"
 	"go.yaml.in/yaml/v3"
 	"tdev/internal/config"
+	"tdev/internal/daemon"
 	"tdev/internal/protocol"
 	"tdev/internal/sshx"
 	"tdev/internal/testssh"
@@ -42,6 +43,7 @@ func buildCLI(t *testing.T, version string) string {
 }
 func executeBinary(t *testing.T, binary, root, sshConfig, input string, want int, args ...string) protocol.Response {
 	t.Helper()
+	daemonCleanup(t, root)
 	argv := []string{"--config-dir", root, "--json"}
 	if len(args) == 0 || args[0] != "api" {
 		argv = append(argv, "--ssh-config", sshConfig)
@@ -118,9 +120,30 @@ type terminalProcess struct {
 
 func terminalCLI(t *testing.T, binary, root, sshConfig string, args ...string) *terminalProcess {
 	t.Helper()
+	daemonCleanup(t, root)
 	cmd := exec.Command(binary, append([]string{"--config-dir", root, "--ssh-config", sshConfig}, args...)...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	return terminalCommand(t, cmd)
+}
+
+func daemonCleanup(t *testing.T, root string) {
+	t.Helper()
+	t.Cleanup(func() {
+		client, err := daemon.New(root)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if _, err = client.Manage(ctx, "stop", "", root); err != nil {
+			t.Error("daemon cleanup:", err)
+			return
+		}
+		if err = os.RemoveAll(client.Dir); err != nil {
+			t.Error(err)
+		}
+	})
 }
 
 func terminalCommand(t *testing.T, cmd *exec.Cmd) *terminalProcess {
