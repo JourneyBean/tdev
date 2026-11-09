@@ -113,7 +113,12 @@ func (m Manager) CreateScratch(ctx context.Context, name, dir string) (Scratch, 
 		}
 		return Scratch{}, err
 	}
-	return m.ScratchStatus(ctx, name)
+	s, err := m.ScratchStatus(ctx, name)
+	if err != nil {
+		return s, err
+	}
+	err = m.configureAlerts(ctx, s.SessionID)
+	return s, err
 }
 
 // Attachment callers pass a name without a project UUID for scratch sessions.

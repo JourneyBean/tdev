@@ -220,6 +220,14 @@ bootstrap 先通过 OpenSSL 3+ 校验签名校验表和二进制哈希，再执�
 
 setup 自动读取已有连接，也支持使用现有 identity/agent 创建私有 SSH profile，Include 既有 SSH config。认证交给系统 OpenSSH，安装与传输需要可批模式认证的身份。缺少 tmux 等依赖时提示先准备环境。四平台签名二进制与安装脚本由公开 Release 分发。
 
+## tmux 标题提醒
+
+项目与 scratch 创建时设置运行中的 tmux 标题及 hook，已有会话在下次附着前补齐。本机和远端使用同一逻辑，状态与 hook 随 tmux 运行时保存。标题为 `session:window`，任一窗口有原生 bell、activity、silence 提醒或失焦 bell 标记时加 `[!]`。开启 `monitor-activity` 时普通输出也属于提醒。agent 完成信号沿用应用发出的 bell。
+
+`client-focus-out` 记录 session 失焦；此时当前窗口的 `alert-bell` 设置窗口选项 `@tdev_unfocused_bell`。重新聚焦清除当前窗口的补充标记；切换窗口清除进入窗口的补充标记。重新附着保留补充标记，附着或切换 session 后默认聚焦，等待终端后续焦点上报。其他窗口标记继续汇总，原生提醒由 tmux 清除。应用仅使用 tmux 命令与格式，无需 agent hook、后台进程或轮询。session 的配置锁与版本标记保证重复附着沿用同一组 hook。
+
+标题、bell-action 和 hook 作用于托管 session，monitor-bell 作用于其窗口，包括后续新建窗口。首次设置 session hook 时复制当时继承的同名全局动作，再追加 tdev 动作；已有本地动作保留。用户配置文件及全局标题、hook 保持原状。`focus-events` 是 server 级选项，需在首次附着前运行时开启，并保持到该 server 结束；同 server 的其他客户端也受此焦点上报设置影响。已附着的客户端需重新附着以请求终端焦点上报。终端缺少焦点上报时仍使用原生窗口提醒。早期隔离调研协议与结果保存在仓库本地 `.summary-web/`。
+
 ## 验证与回退
 
 Shell 补全复用 Cobra 的 Bash V2 / zsh 脚本生成和隐藏补全协议。注册服务器、项目、SSH 别名及定义 ID 的候选函数；远端项目来自 `api project list` 原始定义，批模式 SSH 查询限时 1.5 秒，避免终端 Tab 等待交互认证或输出诊断。Bash 脚本提供私有帮助函数，兼容未安装 bash-completion 的环境。文件传输的本机路径继续使用 shell 文件补全。
