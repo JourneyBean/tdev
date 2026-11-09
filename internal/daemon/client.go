@@ -23,16 +23,17 @@ import (
 const Protocol = 1
 
 type Request struct {
-	Op       string
-	Alias    string
-	SSH      sshx.Options
-	Socket   string
-	Forwards []config.Forward
-	Local    bool
-	Policy   reconnect.Policy
-	Preserve bool
-	Payload  json.RawMessage
-	Owner    string
+	Op         string
+	Alias      string
+	SSH        sshx.Options
+	Socket     string
+	Forwards   []config.Forward
+	Local      bool
+	Policy     reconnect.Policy
+	Preserve   bool
+	Payload    json.RawMessage
+	Owner      string
+	Allocation *Allocation `json:",omitempty"`
 }
 
 type State struct {
@@ -43,6 +44,7 @@ type State struct {
 	Socket      string          `json:"socket,omitempty"`
 	Result      json.RawMessage `json:"result,omitempty"`
 	Warnings    []string        `json:"warnings,omitempty"`
+	Inspection  *Inspection     `json:"inspection,omitempty"`
 }
 
 type ForwardState struct {
@@ -57,7 +59,7 @@ type reply struct {
 	Exit  int
 }
 
-type Client struct{ Dir string }
+type Client struct{ Dir, Root string }
 
 // ConnectionKey isolates SSH aliases and profiles within one daemon.
 func ConnectionKey(alias string, opts sshx.Options) string {
@@ -82,7 +84,7 @@ func New(root string) (Client, error) {
 	if !info.IsDir() || info.Mode().Perm()&0077 != 0 || !ok || stat.Uid != uint32(os.Getuid()) {
 		return Client{}, config.Invalid("daemon runtime directory must be private and owned by this user")
 	}
-	return Client{Dir: dir}, nil
+	return Client{Dir: dir, Root: abs}, nil
 }
 
 func (c Client) Socket() string { return filepath.Join(c.Dir, "daemon.sock") }

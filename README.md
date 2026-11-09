@@ -4,10 +4,10 @@
 选择已有连接或填写服务器地址，读取目标设备的项目配置，随后打开项目继续开发。
 复用系统 OpenSSH 和 tmux，远端无需数据库、HTTP API 或常驻 tdev 服务。
 
-当前源码版本为 `0.4.1`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
+当前源码版本为 `0.5.0`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
 挂载、本地连接 daemon、功能选择、签名安装升级和回滚。设计基线见[产品与技术设计](docs/design.md)，实现取舍见
 [开发记录](docs/development.md)，实际通过与尚未实测的场景见[第一版验收记录](docs/acceptance.md)。
-版本变更见[发布说明](docs/releases/v0.4.1.md)。二进制 Release 位于
+版本变更见[发布说明](docs/releases/v0.5.0.md)。二进制 Release 位于
 [GitHub](https://github.com/JourneyBean/tdev/releases)。
 
 ## 安装
@@ -71,6 +71,9 @@ tdev daemon start                  # 幂等启动
 tdev daemon status
 tdev daemon restart
 tdev daemon stop                   # 保持停止，start 恢复
+tdev ps                            # 本机与已登记远端的 daemon、SSH 连接及通道
+tdev ps --server local             # 仅查询本机
+tdev ps --json                     # 结构化快照
 tdev open dev/demo --only shell
 tdev open dev/demo --only forward  # 后台保留转发，启动后返回
 tdev open dev/demo --only sshfs    # 使用已配置挂载路径；交互时可询问路径
@@ -78,6 +81,8 @@ tdev open dev/demo --only forward,sshfs
 ```
 
 默认 `open` 启动 shell 和 forward，`--mount` 额外启动 SSHFS；shell 退出时释放本次附属资源，其他窗口仍使用的资源保留。只选 forward/sshfs 时后台保留，转发通过 daemon stop 结束，挂载通过 unmount 安全卸载。web 等待后续 HTTP 服务实现。详见[连接管理](docs/ssh-connection-reuse.md)。
+
+`ps` 按机器、daemon、连接和通道展示当前用户的运行状态，支持 `--server dev`。查询保持已停止的 daemon 状态，远端使用非交互 SSH；部分服务器不可达时保留其他结果并返回 9。旧 daemon 需先用新版 `tdev daemon restart` 启用明细。实际 SSH 通道查询需要 OpenSSH 10.3 或更新版本；旧版展示 tdev 的操作分配记录，并标明实际通道统计不可用。
 
 完整标识为 `server/project`。裸名称先查本机，再按服务器名称排序查找远端；自动匹配时显示完整目标。缓存命中的目标离线时报告错误。裸名称 create 默认在本机创建；不带项目名的 create 向导先选择位置，本机为默认项。
 

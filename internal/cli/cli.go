@@ -18,7 +18,7 @@ import (
 	"tdev/internal/tmux"
 )
 
-var Version = "0.4.1"
+var Version = "0.5.0"
 
 type app struct {
 	root         *cobra.Command
@@ -66,6 +66,7 @@ func executeContext(parent context.Context, args []string, in io.Reader, out, er
 	a.api()
 	a.client()
 	a.daemonCommands()
+	a.psCommand()
 	a.pathCommand()
 	a.completionCommands()
 	a.commandHelp()

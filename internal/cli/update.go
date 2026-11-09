@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"tdev/internal/config"
+	"tdev/internal/daemon"
 	"tdev/internal/protocol"
 	"tdev/internal/sshx"
 	"tdev/internal/tmux"
@@ -132,6 +133,9 @@ func (a *app) updateCommands() {
 				if destination != "" {
 					t.Server.RemoteBinary = destination
 				}
+				if op == "upgrade" {
+					a.upgradeNotice(remote)
+				}
 				if rollback {
 					b, err := a.call(c.Context(), t, nil, "binary", "rollback", "--destination", t.Server.RemoteBinary)
 					return a.result(b, err)
@@ -151,9 +155,23 @@ func (a *app) updateCommands() {
 			if err != nil {
 				return err
 			}
+			// Capture the running path before replacing its executable.
+			refreshDaemon := false
+			if op == "upgrade" {
+				a.upgradeNotice("")
+				executable, executableErr := os.Executable()
+				if executableErr != nil {
+					return executableErr
+				}
+				current, currentErr := update.Destination(executable)
+				if currentErr != nil {
+					return currentErr
+				}
+				refreshDaemon = current == destination
+			}
 			if rollback {
 				result, err := update.Rollback(c.Context(), a.store, destination)
-				return a.result(result, err)
+				return a.finishUpgrade(c.Context(), destination, refreshDaemon, result, err)
 			}
 			if old, err := update.ReadReceipt(destination); err == nil {
 				receipt = &old
@@ -170,7 +188,13 @@ func (a *app) updateCommands() {
 					return err
 				}
 			}
+			beforeInstall, _ := os.Stat(destination)
 			result, err := update.Install(c.Context(), a.store, b, destination)
+			if err == nil && refreshDaemon && beforeInstall != nil {
+				if afterInstall, statErr := os.Stat(destination); statErr == nil && os.SameFile(beforeInstall, afterInstall) {
+					refreshDaemon = false
+				}
+			}
 			if err == nil && op == "install" {
 				completion, completionErr := a.configureCompletionAfterInstall(c.Context(), completionMode, destination)
 				if completionErr != nil {
@@ -180,7 +204,7 @@ func (a *app) updateCommands() {
 					return a.result(map[string]any{"installation": result, "completion": completion}, nil)
 				}
 			}
-			return a.result(result, err)
+			return a.finishUpgrade(c.Context(), destination, refreshDaemon, result, err)
 		}}
 		a.root.AddCommand(c)
 		releaseFlags(c)
@@ -192,6 +216,34 @@ func (a *app) updateCommands() {
 		}
 	}
 }
+
+func (a *app) upgradeNotice(remote string) {
+	if remote != "" {
+		fmt.Fprintln(a.errOut, "升级期间端口映射可能短暂中断。远端升级保留现有 SSH 连接和 tmux 会话；现有附着进程继续运行，后续请求和断线重连使用升级后的远端程序。")
+		fmt.Fprintf(a.errOut, "连接中断时，当前终端按重连策略恢复原会话；自动重连失败后可运行 tdev open %s/<项目名>。协议不兼容时请先升级本地客户端。\n", remote)
+		return
+	}
+	fmt.Fprintln(a.errOut, "升级期间端口映射可能短暂中断。本地原位更新二进制后会用目标版本重启当前配置的运行中 daemon；活跃终端按重连策略恢复原 tmux 会话，后台映射重新建立。相同内容的重复升级及已停止的 daemon 保持原状。")
+	fmt.Fprintln(a.errOut, "现有客户端进程继续运行原版本；自动重连失败后请重新运行 tdev open <服务器>/<项目名>。")
+}
+
+// Refresh only a running supervisor after a successful in-place upgrade. The
+// lifecycle operation uses the installed executable, not this process's old image.
+func (a *app) finishUpgrade(ctx context.Context, destination string, refresh bool, result any, installErr error) error {
+	if installErr != nil || !refresh {
+		return a.result(result, installErr)
+	}
+	ctx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	client, err := daemon.New(a.store.Root)
+	if err == nil {
+		_, err = client.Manage(ctx, "refresh", destination, a.store.Root)
+	}
+	if err != nil {
+		return a.result(nil, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "binary updated; daemon restart failed; run tdev daemon restart, then reopen affected projects: " + err.Error(), Details: result})
+	}
+	return a.result(result, nil)
+}
 func (a *app) shell(ctx context.Context, t target, command string) (data []byte, resultErr error) {
 	started := time.Now()
 	var exitCode *int
@@ -200,12 +252,14 @@ func (a *app) shell(ctx context.Context, t target, command string) (data []byte,
 	defer cancel()
 	var args []string
 	var err error
+	release := func() {}
 	if !t.Local {
-		args, err = a.remoteArgs(ctx, t, false, command)
+		args, release, err = a.remoteArgs(ctx, t, false, command, "bootstrap")
 		if err != nil {
 			return nil, err
 		}
 	}
+	defer release()
 	cmd := sshx.Command(ctx, "ssh", args...)
 	if t.Local {
 		cmd = sshx.Command(ctx, "sh", "-c", command)

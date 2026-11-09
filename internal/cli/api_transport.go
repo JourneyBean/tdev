@@ -41,6 +41,8 @@ func apiCapability(args []string) string {
 		return "api-v1"
 	}
 	switch args[0] {
+	case "ps":
+		return "ps-v1"
 	case "scratch":
 		return "scratch-v1"
 	case "project":
@@ -133,10 +135,11 @@ func (a *app) calls(ctx context.Context, t target, input []byte, operations ...[
 		argv := append([]string{"--json", "--timeout", a.timeout.String(), "api"}, args...)
 		script += remoteCommand(t, argv...) + "; tdev_rc=$?; printf '\\n" + marker + " %s\\n' \"$tdev_rc\"; test \"$tdev_rc\" -eq 0 || exit \"$tdev_rc\"; "
 	}
-	sshArgs, err := a.remoteArgs(ctx, t, false, script)
+	sshArgs, release, err := a.remoteArgs(ctx, t, false, script, "api")
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	cmd := sshx.Command(ctx, "ssh", sshArgs...)
 	cmd.Stdin = bytes.NewReader(input)
 	var stderr bytes.Buffer
@@ -167,7 +170,7 @@ func (a *app) calls(ctx context.Context, t target, input []byte, operations ...[
 				version = v.Version
 			}
 		}
-		return nil, protocol.Fail("PROTOCOL_INCOMPATIBLE", 8, "server %s runs tdev %s; upgrade the server to v0.1.0 or a compatible version (tdev upgrade --remote %s)", t.Name, version, t.Name)
+		return nil, protocol.Fail("PROTOCOL_INCOMPATIBLE", 8, "server %s runs tdev %s; client runs tdev %s. Install compatible versions: update the local client (tdev upgrade) or the server (tdev upgrade --remote %s), then reconnect with tdev open %s/<project>", t.Name, version, Version, t.Name, t.Name)
 	}
 	for i, frame := range frames[2:] {
 		data, err := decodeAPI(frame)

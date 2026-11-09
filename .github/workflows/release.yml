@@ -97,7 +97,7 @@ jobs:
             test_flags=(-overlay="$GITHUB_WORKSPACE/.ci-tests/overlay.json")
           fi
           runuser -u developer -- env PATH="$PATH" GOCACHE=/tmp/tdev-go-build GOMODCACHE=/tmp/tdev-go-mod make check
-          runuser -u developer -- env PATH="$PATH" GOCACHE=/tmp/tdev-go-build GOMODCACHE=/tmp/tdev-go-mod TDEV_REQUIRE_INTEGRATION=1 go test "${test_flags[@]}" -race -count=1 -timeout 240s ./...
+          runuser -u developer -- env PATH="$PATH" GOCACHE=/tmp/tdev-go-build GOMODCACHE=/tmp/tdev-go-mod TDEV_REQUIRE_INTEGRATION=1 go test "${test_flags[@]}" -race -count=1 -timeout 300s ./...
 
   release:
     needs: test

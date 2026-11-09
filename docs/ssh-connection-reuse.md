@@ -41,11 +41,27 @@ tdev open dev/demo --only forward,sshfs
 
 OpenSSH keepalive 检测断线，daemon 每两秒检查已登记的控制 master，并对可恢复故障重建连接。认证及主机密钥错误保留诊断，后台停止自动尝试；显式操作可再次发起认证。终端保留原有重试预算，并检查原 session ID/generation；业务写操作保持现有结果核实和 revision 语义。
 
+R 映射断线后，旧远端连接的监听释放可能晚于客户端重连。曾经成功建立的 R 映射遇到远端绑定失败时，按转发重连预算等待恢复；首次创建时的端口冲突直接报错。长时间网络分区下，恢复取决于旧远端连接释放监听及配置的重试预算。
+
 每次重建 master 使用新目录及 socket，旧代次清理只作用于旧目录。后台转发独立使用 forward 重连策略。daemon 正常关闭会清理自己拥有的传输；异常退出后再次 start 会清理私有目录内的旧 master，再恢复登记的连接和后台转发。远端 tmux 会话继续运行。
 
 shell 附属资源的使用权由独立 Unix HTTP 请求维持。正常退出显式释放；进程异常退出时 socket 关闭也会触发释放。创建后尚未建立存续请求的使用权在十秒后回收。登记/最后释放期间串行化映射启动和取消，避免旧监听尚未关闭时创建新监听。
 
 ## 运维和后续扩展
+
+`tdev ps` 按机器 → daemon → SSH master → 操作分配和实际通道展示当前用户的快照。默认查询本机与全部已登记服务器，`--server local` 或 `--server dev` 缩小范围，`--json` 输出协议数据。每台机器可包含多个配置根的 daemon；远端枚举当前 SSH 登录用户的 tdev daemon，服务器查询保持一跳。远端本来只运行按次 tdev API 时，daemon 列表为空。
+
+本机通过私有 Unix socket 查询，远端通过独立的非交互 SSH 调用 `api ps`；查询保持 daemon 停止状态。部分机器不可达时返回 9，文本保留其他结果，JSON 的 error.details 包含完整快照。旧远端缺少 ps-v1 时显示 upgrade-required；旧 daemon 显示 running-legacy 和重启提示。首次升级后可分别在本机和需要查看明细的远端运行 `tdev daemon restart`。
+
+连接显示用途、SSH 别名、master PID、资源状态、使用权数量和后台保留属性。实际 SSH 通道展示 ID、类型、开关状态与缓冲字节。tdev 的 allocation 列出 API、终端、安装引导的项目和客户端 PID；其 ID 属于本机登记，与 SSH 通道 ID 分开。SSHFS 显示登记的 helper PID，独立传输和通道未知；本机转发标记为 local。独立 scp、非 tdev 管理的 SSH 和系统 sshd 进程属于各自的管理范围。
+
+OpenSSH 从 [10.3](https://www.openssh.org/txt/release-10.3) 起提供 `ssh -O channels`。旧版及未知输出将实际通道标为不可用，保留 tdev 的操作分配和资源状态。master-running 依据本地控制探测，网络故障可能仍在 keepalive 检测窗口内；快照跨多个进程，查询期间的短操作可能已经结束。已有旧客户端的操作可通过新版 OpenSSH 的实际通道观察，其 tdev 分配登记需使用支持该功能的客户端。原始通道描述、命令参数、环境与凭据均不写入快照。
+
+`tdev upgrade` 与 `tdev upgrade --rollback` 会提示端口映射可能短暂中断。本地原位更新后，用安装后的二进制重启当前配置的运行中 daemon；后台转发自动恢复，活跃终端按重连策略重新附着原 tmux 会话。相同内容的重复升级和已停止的 daemon 保持原状。其他配置根仍运行各自的 daemon，需要分别执行 `tdev daemon restart`。更新其他安装路径时，在对应安装实例中重启 daemon。
+
+`tdev upgrade --remote dev` 保留当前连接与远端会话，现有附着进程继续运行原版本；后续请求和断线重连执行新远端程序。自动重连耗尽或认证失败后，运行 `tdev open dev/demo` 恢复原会话。协议不兼容时先安装兼容的本地与远端版本，再重新 open；运行中的旧客户端进程通过重新 open 切换到本地新版本。
+
+上述自动刷新由执行 upgrade 的客户端完成。首次从尚无刷新逻辑的旧客户端升级后，需用新客户端执行 `tdev daemon restart`，使已运行的 daemon 切换到新版本；端口映射可能短暂中断。
 
 运行目录保留连接参数引用和后台转发定义；文件权限为 0600，保存内容沿用客户端配置的隐私边界。重启系统或清理系统临时目录后需重新打开服务。SSHFS 的现有挂载记录继续存放在客户端配置根。
 

@@ -37,6 +37,17 @@ func (c Client) Manage(ctx context.Context, op, executable, root string) (State,
 	if op == "status" {
 		return state, probeErr
 	}
+	// Upgrade refresh must not start a stopped daemon, including when a stop
+	// raced with binary replacement. Probe under the same lifecycle lock.
+	if op == "refresh" {
+		if ctx.Err() != nil {
+			return State{}, ctx.Err()
+		}
+		if probeErr != nil && protocol.Normalize(probeErr).Code == "DAEMON_UNAVAILABLE" {
+			return State{Protocol: Protocol}, nil
+		}
+		op = "restart"
+	}
 	if probeErr != nil && protocol.Normalize(probeErr).Code != "DAEMON_UNAVAILABLE" {
 		return State{}, probeErr
 	}

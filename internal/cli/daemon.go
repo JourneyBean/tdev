@@ -206,13 +206,26 @@ func daemonTarget(t target) (target, error) {
 	return t, nil
 }
 
-func (a *app) remoteArgs(ctx context.Context, t target, tty bool, command string) ([]string, error) {
+func (a *app) remoteArgs(ctx context.Context, t target, tty bool, command, purpose string) ([]string, func(), error) {
+	noop := func() {}
 	if !a.useDaemon {
-		return append(t.SSH.Args(t.Batch), "-T", t.Server.SSHAlias, command), nil
+		return append(t.SSH.Args(t.Batch), "-T", t.Server.SSHAlias, command), noop, nil
 	}
 	m, err := a.controlTransport(ctx, t)
 	if err != nil {
-		return nil, err
+		return nil, noop, err
 	}
-	return m.Args(tty, command), nil
+	client, err := daemon.New(a.store.Root)
+	if err != nil {
+		return nil, noop, err
+	}
+	release, err := client.TrackChannel(ctx, daemon.Allocation{ID: "c" + strings.ReplaceAll(config.NewID(), "-", ""), Socket: m.Socket, Kind: purpose, Project: t.Project, ClientPID: os.Getpid()})
+	if err != nil {
+		// An already-running older supervisor can still carry SSH operations.
+		if protocol.Normalize(err).Code != "INVALID_CONFIG" {
+			return nil, noop, err
+		}
+		release = noop
+	}
+	return m.Args(tty, command), release, nil
 }

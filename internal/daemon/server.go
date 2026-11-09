@@ -31,6 +31,7 @@ type connection struct {
 }
 
 type managedForward struct {
+	request  Request
 	group    *forward.Group
 	state    ForwardState
 	ready    chan struct{}
@@ -56,6 +57,7 @@ type supervisor struct {
 	forwardMu       sync.Mutex
 	warnings        []string
 	ephemeralMounts map[string]bool
+	channels        map[string]Allocation
 }
 
 func identity(r Request) string {
@@ -96,6 +98,7 @@ func (c Client) Serve(ctx context.Context, services ...func(context.Context, Req
 	s := &supervisor{client: c, ctx: ctx, stop: cancel, connections: map[string]*connection{}, forwards: map[string]*managedForward{}, desired: map[string]Request{}}
 	s.leases = map[string]*lease{}
 	s.mounts = map[string]*managedMount{}
+	s.channels = map[string]Allocation{}
 	if err = s.loadMountOwnership(); err != nil {
 		listener.Close()
 		return err
@@ -136,6 +139,12 @@ func (s *supervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch req.Op {
 		case "status":
 			state = s.status()
+		case "inspect":
+			inspection := s.inspect(r.Context())
+			state = State{Protocol: Protocol, PID: os.Getpid(), Inspection: &inspection}
+		case "channel":
+			s.holdChannel(w, r, req.Allocation)
+			return
 		case "stop":
 			state = s.status()
 			s.mu.Lock()
@@ -385,7 +394,7 @@ func (s *supervisor) startForwards(ctx context.Context, req Request) (State, err
 			} else {
 				g = forward.Start(s.ctx, req.Alias, opts, []config.Forward{f}, req.Policy)
 			}
-			e = &managedForward{group: g, ready: make(chan struct{}), state: ForwardState{Spec: "-" + f.Direction + " " + f.Spec(), State: "connecting"}, owners: owners, durable: durable}
+			e = &managedForward{request: req, group: g, ready: make(chan struct{}), state: ForwardState{Spec: "-" + f.Direction + " " + f.Spec(), State: "connecting"}, owners: owners, durable: durable}
 			s.forwards[key] = e
 			s.wg.Add(1)
 			go s.forwardEvents(e)

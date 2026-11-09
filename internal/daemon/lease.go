@@ -21,6 +21,8 @@ type lease struct {
 }
 
 type managedMount struct {
+	pid     int
+	source  string
 	path    string
 	request Request
 	owners  map[string]bool
@@ -168,7 +170,10 @@ func (s *supervisor) startMount(ctx context.Context, req Request) (State, error)
 	if err != nil {
 		return State{}, err
 	}
-	var record struct{ Path string }
+	var record struct {
+		Path, Source string
+		ProcessPID   int `json:"process_pid"`
+	}
 	if err = json.Unmarshal(b, &record); err != nil {
 		return State{}, err
 	}
@@ -184,6 +189,7 @@ func (s *supervisor) startMount(ctx context.Context, req Request) (State, error)
 		} else {
 			e.owners[req.Owner] = true
 		}
+		e.pid, e.source = record.ProcessPID, record.Source
 		if e.durable {
 			delete(s.ephemeralMounts, record.Path)
 		} else {

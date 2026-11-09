@@ -6,7 +6,23 @@
 
 默认 open 的附属资源随 shell 退出释放；多个窗口共享使用权，最后一个退出才清理临时资源。显式服务模式 `open --only forward/sshfs` 后台保留。存续请求断开会回收异常退出客户端的使用权；挂载沿用身份核对与安全卸载。daemon restart 恢复后台转发和活跃 open 的使用权；stop 保持停止，start 恢复。后续 web 功能保留入口并在执行前报告尚未实现。行为、隐私边界及运维细节见 [本地 daemon 与 SSH 连接管理](ssh-connection-reuse.md)。
 
-Last verified: 2026-11-09。版本：0.4.1。历史集成验收使用开发版版本号，见验收记录。
+`upgrade` 及其回滚在确认和替换前向 stderr 提示映射可能短暂中断，并给出自动重连与重新 open 的恢复方式；`--json` 的 stdout 保留单个协议响应，`-y` 保留升级提示。本地原位替换成功后使用目标二进制刷新当前配置根的运行中 daemon，后台转发从登记恢复，活跃 open 重新持有使用权并附着原会话。刷新在生命周期锁内检查运行状态，与 stop 串行化；已停止的 daemon、相同内容的重复升级、签名失败和取消操作保留原运行状态。更新其他目标路径时，由该安装实例自行管理 daemon。二进制已提交而 daemon 刷新失败时返回 PARTIAL_SUCCESS，保留安装收据并提示手动 restart。
+
+远端升级保留现有 SSH master 和附着进程，后续 API 与重新附着从安装路径执行新程序。断线后先经过能力门禁，再核对原 session ID/generation；协议不兼容时退出并提示安装兼容的本地或远端版本、重新 open。已有本地客户端进程继续运行原代码；其他配置根的 daemon 由各自客户端显式 restart。
+
+已成功建立过的 R 映射在断线重连时，旧远端 SSH 连接可能仍占用监听端口。此时 remote port forwarding failed 按原转发重连预算继续等待；首次创建的端口冲突仍立即失败。恢复过程通过新连接重新绑定，保留其他使用者的监听。
+
+Last verified: 2026-11-10。版本：0.5.0。历史集成验收使用开发版版本号，见验收记录。
+
+v0.5.0 汇总本地连接监督、open 功能选择、tmux 标题提醒、升级连接恢复与 ps 快照。源码默认值与 Makefile 统一为 0.5.0，机器协议与配置 schema 保持为 1，新增 ps-v1 能力，沿用现有安装签名公钥。GitHub/GitLab 的完整竞态测试超时统一为 300 秒，覆盖新增的真实签名升级与双向映射恢复用例。
+
+## daemon、连接与通道快照
+
+`ps` 默认汇总本机和已登记远端，支持 `--server` 与 `--json`；远端通过 `ps-v1` 能力门禁及 `api ps` 查询当前登录用户的运行目录。枚举全部配置根对应的私有、属主匹配的 Unix socket，跳过符号链接和开放权限目录，保留旧 daemon 的 PID 并提示 restart。查询使用独立 BatchMode SSH，保持已停止 daemon 的状态，避免将自身登记为持久连接。并发与单次探测均有上限，部分失败返回 9，完整快照放入 error.details；文本仍输出成功机器的结果。
+
+daemon 的 inspect 快照关联控制 master、转发组的当前 socket、挂载记录与操作分配。控制连接获取锁被占用时报告 connecting，避免等待慢网络；资源锁仅用于复制状态，本地 OpenSSH 探测在锁外完成。`ssh -O check` 提供 master PID 与存活信息，表示本地 master 正在运行，远端故障仍可能处于 keepalive 检测窗口。`ssh -O channels` 解析实际通道的 ID、类型、状态及缓冲字节，排除本地 mux 控制通道并丢弃原始描述，避免采集应用命令。未知输出或旧 OpenSSH 明确标记统计不可用。
+
+API、终端附着和安装引导分别登记用途、项目名、客户端 PID 与开始时间；分配只保存在内存，通过已确认的 Unix HTTP 存续请求维持，正常结束、取消或客户端退出时释放。分配 ID 独立于 SSH wire channel ID，实际通道不支持时仍可展示 tdev 使用者。登记连接失败沿用可重试的传输错误分类，兼容旧 daemon 的未知操作响应。转发与 SSHFS 的 owners/durable 表示资源使用权；本机转发没有 SSH 通道，SSHFS 仅展示已登记的 helper PID，实际独立传输状态与通道未知。独立 scp 及其他程序的 SSH 连接保持各自生命周期，快照只汇总 tdev daemon 管理的资源。
 
 ## GitHub CI 与发布
 

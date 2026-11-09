@@ -7,10 +7,14 @@ import (
 
 	"github.com/spf13/cobra"
 	"tdev/internal/config"
+	"tdev/internal/daemon"
 	"tdev/internal/protocol"
 )
 
 func (a *app) apiExtras(local, session *cobra.Command) {
+	a.command(local, "ps", "Inspect this user's existing daemon processes without starting services", cobra.NoArgs, func(ctx context.Context, _ *cobra.Command, _ []string) (any, error) {
+		return daemon.InventoryForUser(ctx)
+	})
 	version := a.command(local, "version", "Machine protocol and capability handshake", cobra.NoArgs, func(_ context.Context, c *cobra.Command, _ []string) (any, error) {
 		required, _ := c.Flags().GetStringArray("require")
 		available := map[string]bool{}
@@ -60,7 +64,7 @@ func (a *app) apiExtras(local, session *cobra.Command) {
 	a.apiUpdate(local)
 }
 func versionData() map[string]any {
-	return map[string]any{"version": Version, "protocol_version": 1, "schema_version": 1, "capabilities": []string{"api-v1", "scratch-v1", "project-v1", "pane-layout-v1", "config-revision-v1", "session-v1", "attachment-v1", "transfer-v1", "transfer-file-directory-v1", "binary-install-v1", "mount-probe-nfc-v1"}}
+	return map[string]any{"version": Version, "protocol_version": 1, "schema_version": 1, "capabilities": []string{"api-v1", "scratch-v1", "project-v1", "pane-layout-v1", "config-revision-v1", "session-v1", "attachment-v1", "transfer-v1", "transfer-file-directory-v1", "binary-install-v1", "mount-probe-nfc-v1", "ps-v1"}}
 }
 func (a *app) clientDoctor() doctorClient {
 	paths := map[string]doctorDependency{}

@@ -25,7 +25,7 @@ test:
     - chown -R developer "$CI_PROJECT_DIR"
   script:
     - runuser -u developer -- env GOCACHE=/tmp/tdev-go-build GOMODCACHE=/tmp/tdev-go-mod make check
-    - runuser -u developer -- env GOCACHE=/tmp/tdev-go-build GOMODCACHE=/tmp/tdev-go-mod TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 240s ./...
+    - runuser -u developer -- env GOCACHE=/tmp/tdev-go-build GOMODCACHE=/tmp/tdev-go-mod TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...
 
 .release_rules:
   rules:

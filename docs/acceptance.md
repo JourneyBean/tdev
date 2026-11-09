@@ -1,8 +1,16 @@
 # 开发验收记录
 
-Last verified: 2026-11-09。源码版本：0.4.1。下表保留集成验收使用的开发版版本号。
+Last verified: 2026-11-10。源码版本：0.5.0。下表保留集成验收使用的开发版版本号。
 
 本记录汇总第一版核心功能的自动化验证、环境实测和待验证项。
+
+## v0.5.0 版本验收
+
+2026-11-10：源码、Makefile、README 与发布说明统一为 0.5.0。`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，含子测试共 248 项；CLI 173.324 秒、daemon 2.945 秒、真实隔离 tmux 9.192 秒。覆盖本地和远端签名升级/回滚、活跃终端重连、L/R 映射恢复、ps 汇总与操作分配、停止状态保持及标题提醒。`make check`、四平台 `make cross` 与 `make build` 通过；构建产物 JSON version 返回 0.5.0、ps-v1，协议及 schema 均为 1。
+
+原生环境为 Linux amd64、Go 1.27.3、tmux 3.6、OpenSSH 10.2。fish 未安装，对应子测试跳过；OpenSSH 10.3+ 的实际通道、macOS 原生交互与真实 FUSE 等限制见“尚未完成的环境或人工验收”。公开文件及待推送历史扫描未发现凭据、内部环境标识或私人页面引用；两处路径命中为通用测试示例。提交与标签使用公开 noreply 身份。
+
+2026-11-09：审计开始时工作区、暂存区及未跟踪文件均为空，验证对象为 `5546ef3`。重点复查本地 daemon、open 功能选择与 tmux 标题提醒，未发现确定的阻断问题。`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，含子测试共 238 项通过；CLI 115.301 秒、daemon 2.205 秒、真实隔离 tmux 8.557 秒。`make check`、四平台 `make cross` 和 `make build` 通过，构建产物 JSON version 返回 0.4.1、协议及 schema 均为 1。原生环境为 Linux amd64、Go 1.27.3、tmux 3.6，真实 SSH/PTY 与 tmux 使用临时配置及私有 socket。fish 未安装，对应 shell 路径子测试跳过；真实 FUSE、macOS 原生交互、终端焦点渲染及多客户端限制沿用下文验收边界。
 
 2026-11-09：标题提醒已接入托管项目与 scratch 的创建及附着路径。真实隔离 tmux/PTY 回归验证失焦当前窗口 bell、焦点恢复只清除当前窗口补充标记、其他窗口原生及补充提醒继续保留、逐窗口切换清除、聚焦时当前窗口 bell 沿用原生已读逻辑，以及 60 秒周期刷新下事件立即更新 OSC 标题。配置回归验证继承的全局 hook 保留、重复设置幂等、普通 session 与全局标题/hook 保持原状、scratch 自动设置。真实本机与隔离 SSH 的 CLI 附着回归验证旧托管 session 自动补齐、重新附着保留补充标记、焦点事件输入、bell 到 OSC 标题输出和聚焦后的多窗口提醒保留。
 
@@ -261,6 +269,8 @@ darwin amd64/arm64 为对应架构 Mach-O。Linux amd64 与 Mac arm64 产物已�
 
 ## 尚未完成的环境或人工验收
 
+- `ps` 已在 Linux、OpenSSH 10.2 下验证真实 master PID、操作分配、独立转发归属和远端汇总。OpenSSH 10.3+ 的实际通道报告目前覆盖格式解析与隐私过滤夹具，原生新版本、macOS、多跳代理、大量并发连接及长时间运行的快照负载待环境实测。SSHFS 仅展示已登记 helper PID，独立传输状态与通道未知。
+
 - 标题提醒已在 Linux tmux 3.6 的本机和 SSH/PTY 链路验证；macOS 切换应用/终端标签页的真实焦点上报、实际标题渲染、真实 agent bell、嵌套 tmux及其他 tmux 版本待实测。同 session 多客户端的焦点竞争未验证，补充状态按最近一次 session 焦点事件记录。已附着客户端在首次开启 server 级 `focus-events` 后需重新附着。
 
 - 状态迁移已在 Linux 本机与隔离 SSH 环境实测；macOS 已完成交叉构建，真实跨文件系统迁移及中断恢复待实测。历史发行版回退后通过新版安装脚本重新升级的完整流程待实测。
@@ -322,3 +332,25 @@ Go 1.27.3、Linux amd64、tmux 3.6 下最终 `TDEV_REQUIRE_INTEGRATION=1 go test
 ## daemon 与 tmux 标题提醒组合验收（2026-11-09）
 
 合并本地连接监督、open 功能选择与 tmux 标题提醒后，`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过：CLI 112.672 秒、daemon 2.325 秒、真实隔离 tmux 8.397 秒。`make check` 和 Linux/macOS amd64/arm64 四平台 `make cross` 通过。标题提醒研究保留原入口；SSH 连接研究的 journal、快照及预览迁入 `.summary-web/studies/ssh-connections/`，原始记录字节核对一致。各功能的环境与人工验收边界继续适用。
+
+## 升级期间的 SSH 与映射生命周期（2026-11-09）
+
+新增真实签名升级专项，在活跃 SSH/PTY、临时 L 映射和后台 R 映射共存时执行本地与远端升级、回滚，并注入断线。核对原 session ID/generation 保留、已有远端附着继续使用原进程、重连后实际远端进程与安装二进制身份一致、本地 daemon 切换到安装后的可执行文件，以及两种方向的 echo 数据往返。最后使用权释放后，临时映射清理、后台映射继续恢复。提示先于确认，`-y` 和 JSON 模式保留 stderr 提示，stdout 为单个协议响应。
+
+失败路径覆盖签名拒绝、取消、重复相同内容升级、已停止 daemon 保持原状，以及二进制已更新而 daemon 重启失败时返回带安装结果的 PARTIAL_SUCCESS。模拟远端协议不兼容后，终端退出码为 8，提示更新本地客户端及重新 open，能力门禁阻止后续操作，原 tmux 会话与后台转发保留。
+
+双向回归发现断线后旧远端监听占用导致 R 映射永久失败，修复为曾成功建立的 R 映射按原重连预算重试绑定；首次端口冲突的保护继续由真实 L/R 转发测试验证。测试收尾等待远端附着进程完成取消诊断后退出，解决临时目录删除与日志写入的竞争。最终 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 180s ./internal/cli -run '^TestUpgrade' -v` 通过，升级流程 55.46 秒、CLI 包 56.521 秒。
+
+最终 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，含子测试共 240 项，CLI 169.421 秒，双向升级用例 53.95 秒。`make check`、Linux/macOS amd64/arm64 四平台 `make cross` 和 `make build` 通过。fish 未安装，对应 shell 路径子测试跳过。
+
+版本夹具由当前源码分别构建为 0.4.1 和 0.4.2；协议不兼容使用受控程序注入。原生执行环境为 Linux amd64、Go 1.27.3、tmux 3.6，使用临时签名密钥、隔离 OpenSSH 和私有 tmux socket。真实历史发行版迁移、真实 FUSE/macOS 挂载与终端体验仍待环境验收。从缺少自动刷新逻辑的旧客户端首次升级后，需要用新客户端执行一次 `tdev daemon restart`。
+
+## daemon、SSH 与通道快照（2026-11-09）
+
+`tdev ps` 支持本机、已登记远端、`--server` 筛选及 JSON。真实隔离 SSH/PTY 用例验证两个配置根的 daemon、master PID、远端分配记录、活跃终端的项目与客户端 PID；停止本机 daemon 后查询远端保持停止状态，远端离线时返回 9 并保留本机结果。快照只做本地控制探测，测试确认未新增 SSH TCP 连接；CLI 的远端观测使用独立、非交互连接。
+
+daemon 回归验证操作取消后移除登记、跨目录 socket 和任意用途拒绝、旧 daemon 的 PID 与能力提示，以及私有目录枚举、符号链接和开放权限目录跳过。格式夹具验证实际通道类型、数字状态和缓冲字节解析，排除 mux 控制与原始命令描述；旧 OpenSSH 统计不可用保持显式状态。文本渲染用例验证终端控制字符转义。使用短临时运行目录覆盖 Unix socket 路径长度边界，全部会话、身份与配置使用私有临时资源。
+
+最终 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，含子测试 248 项：CLI 172.516 秒、daemon 2.802 秒、真实 tmux 8.927 秒。升级、daemon restart、双向转发与连续断线重连回归一并通过。`make check`、Linux/macOS amd64/arm64 四平台 `make cross` 与 `make build` 通过。构建产物使用临时配置运行 JSON `ps --server local`，无 daemon 时返回空数组、退出 0，配置目录保持为空。fish 未安装，对应 shell 路径子测试跳过。
+
+原生环境为 Linux amd64、Go 1.27.3、tmux 3.6、OpenSSH 10.2；实际通道查询在该 OpenSSH 版本不可用，API、终端及安装引导的 tdev 分配登记已实测。其他环境与实际通道原生验证边界见“尚未完成的环境或人工验收”。

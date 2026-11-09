@@ -75,8 +75,9 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 		}
 		var m *sshx.Master
 		var args []string
+		release := func() {}
 		if a.useDaemon {
-			args, e = a.remoteArgs(ctx, t, true, command)
+			args, release, e = a.remoteArgs(ctx, t, true, command, "terminal")
 		} else {
 			m, e = sshx.Start(ctx, t.Server.SSHAlias, t.SSH, t.Batch)
 			if e == nil {
@@ -91,6 +92,7 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 			return e
 		}
 		closeOwned := func() {
+			release()
 			if m != nil {
 				m.Close()
 			}
