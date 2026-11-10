@@ -12,6 +12,8 @@ Last verified: 2026-11-10。源码版本：0.6.0。下表保留集成验收使�
 
 公开文件、文件名与四平台二进制扫描未发现凭据或内部环境信息泄漏。五处模式命中经复核为既有产品迁移名称与通用测试路径；提交与标签使用公开 noreply 身份。
 
+2026-11-10：首次标签 CI 在 tmux 3.3a 的服务退出用例失败，已退出 pane 的 pane_dead_status 为空。临时解包 Debian tmux 3.3a 复现，延长等待仍为空；改为验证 pane_dead、保留输出及启动计数后，专项连续 10 轮通过。完整 tmux 回归随后暴露分屏用例的同类断言，统一调整后通过。tmux 3.6 完整竞态回归通过，make check 与 actionlint v1.7.12 通过。补发使用 Go test overlay 读取兼容测试夹具，生产源码继续取原 v0.6.0 标签。CI 同时修复提交 SHA 读取时的目录归属检查和命令替换错误遗漏。
+
 ## v0.5.0 版本验收
 
 2026-11-10：源码、Makefile、README 与发布说明统一为 0.5.0。`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，含子测试共 248 项；CLI 173.324 秒、daemon 2.945 秒、真实隔离 tmux 9.192 秒。覆盖本地和远端签名升级/回滚、活跃终端重连、L/R 映射恢复、ps 汇总与操作分配、停止状态保持及标题提醒。`make check`、四平台 `make cross` 与 `make build` 通过；构建产物 JSON version 返回 0.5.0、ps-v1，协议及 schema 均为 1。

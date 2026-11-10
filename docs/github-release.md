@@ -35,7 +35,7 @@ gh workflow run release.yml --repo JourneyBean/tdev --ref main -f tag=v0.3.0
 
 手动运行从已有标签检出源码、执行测试，并按测试记录的提交 SHA 构建。目标标签无需移动。若通过 GITHUB_TOKEN 推送标签，使用 workflow_dispatch 显式触发发布；该 token 产生的普通 push 事件受 [GitHub 防递归规则](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow)限制。
 
-v0.3.0 的终端测试夹具通过 Go test overlay 读取 workflow 提交中的 ANSI 兼容断言；原标签文件与生产构建源码保持原样。
+v0.3.0 的终端测试夹具通过 Go test overlay 读取 workflow 提交中的 ANSI 兼容断言；v0.6.0 的服务退出和分屏夹具使用同样机制，兼容 tmux 3.3a 退出码字段缺失的情况，验证 pane 退出、输出保留及启动计数。原标签文件与生产构建源码保持原样。测试步骤记录检出标签的提交 SHA，读取失败时立即终止；发布构建明确检出该 SHA。
 
 ## 产物与重试
 

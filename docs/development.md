@@ -32,7 +32,7 @@ GitHub Actions 在 main 推送、PR 及版本标签事件中运行静态检查�
 
 测试任务使用与 GitLab 相同的 Go Bookworm 容器，在独立普通用户下执行，并显式使用 C.UTF-8 locale。隔离 Runner 的交互 shell 配置及 tmux 版本差异，保留完整真实 SSH、PTY、CJK 和连续断线测试。
 
-终端文本断言忽略 ANSI 显示控制码，OSC 标题仍按原始字节验证。补发已有 v0.3.0 时，Go test overlay 使用 workflow 提交中的兼容终端夹具；生产源码及发布构建仍取原标签的提交。
+终端文本断言忽略 ANSI 显示控制码，OSC 标题仍按原始字节验证。补发已有 v0.3.0 时，Go test overlay 使用 workflow 提交中的兼容终端夹具；v0.6.0 使用兼容 tmux 3.3a 的服务退出与分屏夹具，直接验证已退出、输出保留及启动计数。生产源码及发布构建仍取原标签的提交。测试提交 SHA 通过限定当前工作区的 safe.directory 读取，读取失败时立即终止。
 
 发布公开后调用独立的只读验证 workflow，通过匿名版本下载地址校验全部附件及 Linux 在线安装。验证 workflow 支持手动输入已有标签，供网络问题恢复后单独重验。
 

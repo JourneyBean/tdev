@@ -140,7 +140,11 @@ func TestIncompleteSessionNotReplayed(t *testing.T) {
 }
 func TestServiceExitRetainsOutputAndDoesNotRestart(t *testing.T) {
 	m, p, ctx := fixture(t)
-	p, err := m.Store.Update(ctx, p.Name, 1, func(p *config.Project) error { p.Windows[0].Command = "printf 'service-done\\n'; exit 7"; return nil })
+	counter := filepath.Join(p.Directory, "service-starts")
+	p, err := m.Store.Update(ctx, p.Name, 1, func(p *config.Project) error {
+		p.Windows[0].Command = "printf x >> " + Quote(counter) + "; printf 'service-done\\n'; exit 7"
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,11 +154,11 @@ func TestServiceExitRetainsOutputAndDoesNotRestart(t *testing.T) {
 	}
 	deadline := time.Now().Add(time.Second)
 	for {
-		out, err := m.run(ctx, "display-message", "-p", "-t", s.SessionID, "#{pane_dead}\t#{pane_dead_status}")
+		out, err := m.run(ctx, "display-message", "-p", "-t", s.SessionID, "#{pane_dead}")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if out == "1\t7" {
+		if out == "1" {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -168,6 +172,9 @@ func TestServiceExitRetainsOutputAndDoesNotRestart(t *testing.T) {
 	out, err := m.run(ctx, "capture-pane", "-p", "-S", "-", "-t", s.SessionID)
 	if err != nil || !strings.Contains(out, "service-done") {
 		t.Fatalf("output %q %v", out, err)
+	}
+	if starts, err := os.ReadFile(counter); err != nil || string(starts) != "x" {
+		t.Fatalf("service restarted: %q %v", starts, err)
 	}
 }
 

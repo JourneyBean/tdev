@@ -50,7 +50,10 @@ jobs:
           persist-credentials: false
       - name: Record tested commit
         id: commit
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          sha=$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - name: Check release version and notes
         id: version
         if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
@@ -66,13 +69,16 @@ jobs:
           fi
           test -s "docs/releases/$RELEASE_TAG.md"
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
-      - name: Read compatible terminal fixture for v0.3.0
-        if: github.event_name == 'workflow_dispatch' && inputs.tag == 'v0.3.0'
+      - name: Read compatible fixtures for existing release tags
+        if: github.event_name == 'workflow_dispatch' && (inputs.tag == 'v0.3.0' || inputs.tag == 'v0.6.0')
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.sha }}
           path: .ci-tests
-          sparse-checkout: internal/cli/integration_test.go
+          sparse-checkout: |
+            internal/cli/integration_test.go
+            internal/tmux/tmux_test.go
+            internal/tmux/layout_test.go
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -90,10 +96,26 @@ jobs:
       - name: Check and test
         env:
           TDEV_REQUIRE_INTEGRATION: '1'
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           test_flags=()
-          if [[ -f .ci-tests/internal/cli/integration_test.go ]]; then
-            printf '{"Replace":{"%s/internal/cli/integration_test.go":"%s/.ci-tests/internal/cli/integration_test.go"}}\n' "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" > .ci-tests/overlay.json
+          fixtures=()
+          if [[ "$RELEASE_TAG" == v0.3.0 ]]; then
+            fixtures=(internal/cli/integration_test.go)
+          elif [[ "$RELEASE_TAG" == v0.6.0 ]]; then
+            fixtures=(internal/tmux/tmux_test.go internal/tmux/layout_test.go)
+          fi
+          if [[ -d .ci-tests && ${#fixtures[@]} -gt 0 ]]; then
+            for fixture in "${fixtures[@]}"; do test -s ".ci-tests/$fixture"; done
+            {
+              printf '{"Replace":{'
+              separator=""
+              for fixture in "${fixtures[@]}"; do
+                printf '%s"%s/%s":"%s/.ci-tests/%s"' "$separator" "$GITHUB_WORKSPACE" "$fixture" "$GITHUB_WORKSPACE" "$fixture"
+                separator=,
+              done
+              printf '}}\n'
+            } > .ci-tests/overlay.json
             test_flags=(-overlay="$GITHUB_WORKSPACE/.ci-tests/overlay.json")
           fi
           runuser -u developer -- env PATH="$PATH" GOCACHE=/tmp/tdev-go-build GOMODCACHE=/tmp/tdev-go-mod make check

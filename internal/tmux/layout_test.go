@@ -109,12 +109,12 @@ func TestNestedLayoutSaveRestore(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		dead, err := m.run(ctx, "display-message", "-p", "-t", windows[0].Leaves[1].PaneID, "#{pane_dead}:#{pane_dead_status}")
+		dead, err := m.run(ctx, "display-message", "-p", "-t", windows[0].Leaves[1].PaneID, "#{pane_dead}")
 		if err != nil {
 			t.Fatal(err)
 		}
 		starts, _ := os.ReadFile(counter)
-		if strings.Contains(output, "BACKEND_READY") && dead == "1:7" && string(starts) == "x" {
+		if strings.Contains(output, "BACKEND_READY") && dead == "1" && string(starts) == "x" {
 			break
 		}
 		if time.Now().After(deadline) {
