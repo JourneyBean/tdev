@@ -64,7 +64,7 @@ tdev 是通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量�
 
 ### 2.2 用户入口与机器接口
 
-用户命令直接操作项目，包含 create/show/edit、ls、open/save/sh/stop、forward、push/pull 与 mount/unmount。连接与安装工具保留独立入口。local 是内置服务器名，表示运行当前 tdev 的机器，无需 setup。
+项目命令包含 create/show/edit、open/save/sh、push/pull 与 mount/unmount；forward 面向服务器，ls 和 stop 统一管理项目、scratch 与临时转发。连接与安装工具保留独立入口。local 是内置服务器名，表示运行当前 tdev 的机器，无需 setup。
 
 `tdev api` 是客户端在目标机器上调用的机器接口，使用明确参数与结构化 stdin，操作当前机器，无业务确认。session attach 是要求终端和 attachment identity 的传输通道。API 按 project、session、transfer、binary 与 mount-probe 分组；窗口和转发定义通过 project get/set 更新。
 
@@ -109,11 +109,10 @@ yes | tdev save
 | tdev open <name> [--mount] [--only FEATURES] | 打开项目或恢复 scratch；按需选择 shell、forward、sshfs |
 | tdev save [project] [-y] | 从运行会话保存窗口结构、目录和已知启动定义 |
 | tdev sh [project] [--name NAME] [--save] [-y] | 新建项目 shell 窗口，可同时保存定义 |
-| tdev forward [project] [-L SPEC] [-R SPEC] | 启动保存的映射或本次临时映射 |
-| tdev stop [project] [-y] | 停止远端项目 session，保留项目配置 |
+| tdev forward [server] -L SPEC / -R SPEC [--foreground] | 启动服务器临时转发；默认后台保留 |
+| tdev stop [name] [-y] | 停止项目、scratch 会话或临时转发组 |
 | tdev push <project> <local_path> <remote_path> | 上传文件或目录 |
 | tdev pull <project> <remote_path> <local_path> | 下载文件或目录 |
-| tdev forward add/remove <project> | 管理保存的映射定义 |
 | tdev mount <project> [local_path] | 将项目远端根目录挂载到本地 |
 | tdev unmount <project> [<local_path>] | 安全卸载本客户端对应挂载 |
 | tdev doctor [project] [--json] | 检查二进制、SSH、tmux、配置和所需功能依赖 |
@@ -147,7 +146,7 @@ doctor、version、unmount、upgrade 是实现默认补充接口。第一版不�
 
 `--only shell,forward,sshfs` 按逗号分隔选择功能；省略时选择 shell+forward，`--mount` 额外选择 sshfs。选中 shell 时附属资源随本次 open 释放，只选择 forward/sshfs 时启动后返回并后台保留，可使用 JSON。服务模式读取已有项目定义，不调用 session ensure。web 为后续 HTTP 服务保留，当前选择时提前报错。
 
-交互终端中，open 遇到尚未配置的项目时询问是否创建，填写项目所在机器的已有目录、按需配置窗口与映射后继续打开，新项目默认窗口 main。拒绝保留 PROJECT_NOT_FOUND，Ctrl-C 取消；连接或配置错误按原错误返回。也可从客户端运行 `tdev create`。setup 发现零项目时提供立即创建入口。`ls/show/edit` 和 `forward add/remove` 管理项目定义，复用原子写入、revision 和备份机制。本机端口偏好继续使用 override。
+交互终端中，open 遇到尚未配置的项目时询问是否创建，填写项目所在机器的已有目录、按需配置窗口与映射后继续打开，新项目默认窗口 main。拒绝保留 PROJECT_NOT_FOUND，Ctrl-C 取消；连接或配置错误按原错误返回。也可从客户端运行 `tdev create`。setup 发现零项目时提供立即创建入口。`ls/show/edit` 管理项目定义，复用原子写入、revision 和备份机制。本机端口偏好继续使用 override。
 
 ensure 必须在并发客户端调用下幂等：不重复创建窗口，不重复执行启动命令。发现未完成初始化的 session 时返回可诊断状态，不盲目重新运行全部命令。可使用项目操作锁和初始化标记，成功启动每个窗口后记录完成状态；崩溃恢复采取显式修复，不追求未经确认的自动重放。
 
@@ -187,37 +186,43 @@ save 不保存终端历史全文、环境秘密、程序内存、网络连接状
 
 ```sh
 # 本地 3000 → 远端 localhost:8000
-tdev forward demo -L 3000:localhost:8000
-tdev forward demo -L 3000:8000
+tdev forward dev -L 3000:localhost:8000
+tdev forward dev -L 3000:8000
 
 # 远端 9000 → 本地 localhost:3000
-tdev forward demo -R 9000:localhost:3000
-tdev forward demo -R 9000:3000
+tdev forward dev -R 9000:localhost:3000
+tdev forward dev -R 9000:3000
 
 # 同端口简写
-tdev forward demo -L 8000
-tdev forward demo -R 9000
+tdev forward dev -L 8000
+tdev forward dev -R 9000
 
-# 连续保存定义；两种方向均支持
-tdev forward add demo -L 8000 -L 5173 -R 9000:3000
-tdev forward demo
+# 多条临时规则组成一组
+tdev forward dev -L 8000 -L 5173 -R 9000:3000
+tdev forward dev -L 8000 --foreground
+tdev ls --type forward
+tdev stop dev/forward-NAME -y
+
+# 项目保存的规则统一通过 edit 修改
+tdev edit dev/demo
+tdev open dev/demo --only forward
 ```
 
 支持标准 TCP 形式 `[bind_address:]port:host:hostport`，IPv6 地址使用方括号。第一版不支持 -D、Unix socket forwarding 和远端动态分配监听端口 0；明确拒绝，不错误解析。端口范围 1–65535。默认监听回环地址，不自动开放到公网或修改服务端 GatewayPorts。
 
-项目参数始终解释为项目名称，纯数字名称同样适用。临时映射通过 -L/-R 显式传入；省略方向参数时使用项目保存的映射及当前客户端 override。
+参数按保存的 server 名称解析。至少提供一条 -L/-R。省略 server 时，有远端配置的交互终端提供选择，非交互命令需明确指定；只有本机时默认 local。临时转发独立于项目定义和 tmux 会话，每次运行生成 forward-… 名称。ls 在对应服务器下列出名称、forward 类型、监听状态及规则，stop server/name 停止整组。ls --type forward 仅查询当前客户端 daemon，可在远端不可达时查看转发状态。
 
-当前项目自动匹配需要 tmux 标记。forward 的“本地”永远指运行 forward 的机器：在远端 tmux 中运行不会反向控制原来的笔记本。若当前机器没有连接目标信息，应要求显式 server/project，不能根据 SSH_CLIENT 猜测或尝试反连笔记本。
+forward 的“本地”指运行命令的客户端；local 使用本机 TCP 监听器，远端 server 使用系统 OpenSSH。连接目标来自当前客户端的 server 配置。
 
 ### 5.2 保存与客户端覆盖
 
-`forward add/remove` 管理项目所在机器的共享映射，保存前验证完整定义并检查 revision。`override --forward ID` 按稳定 ID 修改当前客户端的监听参数。create/edit 向导也可配置映射。
+项目共享映射统一由 `edit` 增、删、改，保存前验证完整定义并检查 revision；非交互更新使用 `edit --stdin --expected-revision N`。移除映射时清理当前客户端对应的 override。`override --forward ID` 按稳定 ID 修改当前客户端的监听参数。create 向导可配置初始映射。
 
-`forward <项目>` 只负责建立和维持监听；显式 -L/-R 为临时映射。定义保存与监听运行分别操作。反向映射将流量送到成功建立监听的客户端，多客户端可能争用同一个远端端口。
+`forward [server]` 运行显式传入的临时规则；项目预设通过 `open --only forward` 运行。反向映射将流量送到成功建立监听的客户端，多客户端可能争用同一个远端端口。
 
 ### 5.3 连接所有权
 
-本地 daemon 由 `tdev daemon start|restart|stop|status` 管理，按需启动。API、completion 与终端共享控制 master；每条映射使用独立 master，相同配置及映射共享监听。显式 forward 继续在前台运行，Ctrl-C 终止本次转发。
+本地 daemon 由 `tdev daemon start|restart|stop|status` 管理，按需启动。API、completion 与终端共享控制 master；每条映射使用独立 master，相同配置及映射共享监听。显式 forward 默认等监听就绪后返回并由 daemon 后台保留；`--foreground` 持有使用权直到退出，Ctrl-C 释放本次转发。临时转发以组名隔离所有权；启动失败或取消时回收整组，保留其他使用者的监听。
 
 带 shell 的 open 持有附属资源使用权，最后一个使用者退出才停止临时映射；客户端异常退出通过存续 socket 断开触发回收。只选择 forward 的 open 后台保留监听。相同监听、不同目标报告占用；对外部 SSH 或其他客户端的隧道不做接管。保存定义继续保留。
 
@@ -248,7 +253,7 @@ ssh:
   server_alive_count_max: 3
 ```
 
-数值是实现默认决策。attempts 接受非负整数或字符串 always；interval 必须为正 duration。forward 是为显式前台 TCP 转发补充的独立策略；HTTP 是后续专用策略。CLI 可使用 --reconnect-attempts 与 --reconnect-interval 覆盖当前命令策略。
+数值是实现默认决策。attempts 接受非负整数或字符串 always；interval 必须为正 duration。forward 是 TCP 转发的独立策略；HTTP 是后续专用策略。CLI 可使用 --reconnect-attempts 与 --reconnect-interval 覆盖当前命令策略。
 
 ### 6.2 状态转换
 
@@ -562,4 +567,4 @@ GoReleaser 可负责产物组织和发布；安装器、签名验证、远端部
 
 临时会话使用独立 tmux 归属标记，实际名称为 `tdev-scratch-<name>`；未指定名称时以自动生成的 UUID 作为名称，形成 `tdev-scratch-<UUID>`。临时会话独立于项目定义、启动配置、转发及 save。detach 和传输断线保留运行进程，最后一个窗口退出时结束。重连只进入匹配原 session ID 与 generation 的会话。
 
-`ls` 默认展示项目和 scratch，支持 `--type project|scratch` 与现有 `--server` 筛选。scratch 从实际 tmux 标记发现，跟随列表缓存和离线状态展示；成功刷新后移除已结束的会话。JSON 保留 projects 数组，并增加 scratches 数组。机器接口 `api scratch create|list|status|attach|attachment` 使用 `scratch-v1` 能力门禁，旧服务器保留项目列表并给出 scratch 升级提示。
+`ls` 默认展示项目、scratch 和当前客户端的临时转发，支持 `--type project|scratch|forward` 与现有 `--server` 筛选。scratch 从实际 tmux 标记发现，跟随列表缓存和离线状态展示；成功刷新后移除已结束的会话。JSON 包含 projects、scratches 和 forwards 数组。机器接口 `api scratch create|list|status|attach|attachment` 使用 `scratch-v1` 能力门禁，旧服务器保留项目列表并给出 scratch 升级提示。

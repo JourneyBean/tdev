@@ -26,7 +26,11 @@ type Inspection struct {
 }
 
 var masterPID = regexp.MustCompile(`Master running \(pid=([0-9]+)\)`)
-var channelStatus = regexp.MustCompile(`^\s*#([0-9]+) .* \(t([0-9]+) \[([a-zA-Z0-9_.@-]+)\] .* i([0-9]+)/([0-9]+) o([0-9]+)/([0-9]+) `)
+
+// OpenSSH reports extended types such as session:command and
+// session:subsystem:<name>. Keep the base type only: subsystem names may
+// contain application arguments rather than a fixed OpenSSH type token.
+var channelStatus = regexp.MustCompile(`^\s*#([0-9]+) .* \(t([0-9]+) \[([a-zA-Z0-9_.@-]+)(?::[^\]\r\n]*)?\] .* i([0-9]+)/([0-9]+) o([0-9]+)/([0-9]+) `)
 
 // Inspect uses only local mux requests. It never authenticates or starts SSH.
 func Inspect(ctx context.Context, socket string) Inspection {

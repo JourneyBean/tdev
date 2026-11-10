@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,11 +32,7 @@ type Receipt struct {
 }
 
 func StateRoot() string {
-	if root := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(root) {
-		return filepath.Join(root, "tdev")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "state", "tdev")
+	return config.StateRoot()
 }
 func installationDirectory(destination string) string {
 	hash := sha256.Sum256([]byte(destination))
@@ -110,7 +107,23 @@ func backupDirectory(store config.Store, destination string) (string, error) {
 	return transfer.Canonical(filepath.Join(installationDirectory(destination), "backups"))
 }
 
-func Install(ctx context.Context, store config.Store, b Bundle, destination string) (Receipt, error) {
+// ActivationHook runs verified target code while the installation lock is held.
+type ActivationHook func(context.Context, string) error
+
+func activate(ctx context.Context, destination string, hooks []ActivationHook, result any, prior error) error {
+	failures := []error{prior}
+	for _, hook := range hooks {
+		if err := hook(ctx, destination); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	if err := errors.Join(failures...); err != nil {
+		return &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "binary committed; post-install processing needs attention: " + err.Error(), Details: result}
+	}
+	return nil
+}
+
+func Install(ctx context.Context, store config.Store, b Bundle, destination string, hooks ...ActivationHook) (Receipt, error) {
 	var r Receipt
 	var err error
 	destination, err = Destination(destination)
@@ -244,20 +257,23 @@ func Install(ctx context.Context, store config.Store, b Bundle, destination stri
 	}
 	encoded, _ := json.MarshalIndent(r, "", "  ")
 	priorReceipt, readErr := os.ReadFile(ReceiptPath(destination))
+	var stateErr error
 	if readErr != nil || !bytes.Equal(priorReceipt, encoded) {
 		if err = config.AtomicWrite(ReceiptPath(destination), encoded, 0600); err != nil {
-			return r, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "binary installed but receipt write failed: " + err.Error(), Details: r}
+			stateErr = fmt.Errorf("receipt write failed: %w", err)
 		}
 	}
 	if err = Candidate(ctx, destination, r.Version); err != nil {
 		return r, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "installed binary verification failed; backup retained: " + err.Error(), Details: r}
 	}
-	if err = pruneBackups(store, destination); err != nil {
-		return r, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "binary installed but backup cleanup failed: " + err.Error(), Details: r}
+	if stateErr == nil {
+		if err = pruneBackups(store, destination); err != nil {
+			stateErr = fmt.Errorf("backup cleanup failed: %w", err)
+		}
 	}
-	return r, nil
+	return r, activate(ctx, destination, hooks, r, stateErr)
 }
-func Rollback(ctx context.Context, store config.Store, destination string) (any, error) {
+func Rollback(ctx context.Context, store config.Store, destination string, hooks ...ActivationHook) (any, error) {
 	destination, err := Destination(destination)
 	if err != nil {
 		return nil, err
@@ -327,15 +343,19 @@ func Rollback(ctx context.Context, store config.Store, destination string) (any,
 	} else {
 		err = os.Remove(ReceiptPath(destination))
 	}
+	var stateErr error
 	if err != nil {
-		return nil, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "binary restored but receipt restoration failed: " + err.Error()}
+		stateErr = fmt.Errorf("receipt restoration failed: %w", err)
 	}
 	actual, err := transfer.Hash(destination)
 	if err != nil || actual != backupHash {
 		return nil, fmt.Errorf("rollback verification failed: %v", err)
 	}
-	if err = pruneBackups(store, destination); err != nil {
-		return nil, protocol.Fail("PARTIAL_SUCCESS", 9, "binary restored but backup cleanup failed: %v", err)
+	if stateErr == nil {
+		if err = pruneBackups(store, destination); err != nil {
+			stateErr = fmt.Errorf("backup cleanup failed: %w", err)
+		}
 	}
-	return map[string]string{"destination": destination, "restored_sha256": actual, "status": "rolled_back"}, nil
+	result := map[string]string{"destination": destination, "restored_sha256": actual, "status": "rolled_back"}
+	return result, activate(ctx, destination, hooks, result, stateErr)
 }

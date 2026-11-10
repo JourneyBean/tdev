@@ -112,3 +112,19 @@ v0.2.0 增加本机诊断日志和 --debug，修复 zsh 登录 shell 下的目�
 v0.1.0 使用 tdev api 机器接口。连接旧版服务端时，客户端显示版本并提示升级；已登记服务器使用 `tdev upgrade --remote dev`。远端通过上传已验证候选二进制完成升级，原 API 无需先支持新协议。
 
 本机项目可直接创建，无需 setup。旧版自动生成名称的 tmux session 按项目 UUID 识别并复用；新项目 session 使用 `tdev-project-<name>`，该名称被无匹配 UUID 的会话占用时使用 `tdev-project-<UUID>`（UUID 去掉连字符）并提示 warning。scratch 使用 `tdev-scratch-<name>`，省略名称时使用自动生成的 UUID。
+
+## 安装后处理
+
+安装脚本、install、upgrade 和回滚在校验目标程序后调用目标版本的 post-install hooks；新安装路径和相同内容重装均执行。当前依次处理 tmux 运行时配置和 daemon 刷新，某项失败后继续执行后续项。成功响应的 post_install 字段包含逐项结果；失败返回 PARTIAL_SUCCESS（退出码 9），error.details 同时保留安装结果与 hook 结果，已安装的二进制保留。
+
+```sh
+tdev post-install                       # 补跑本机当前版本的处理
+tdev post-install --remote dev           # 补跑登记远端的处理
+tdev --json api binary post-install      # 当前机器的非交互入口
+```
+
+处理范围为指定配置根；其他配置根分别用 `--config-dir` 执行。项目会话按 UUID 匹配，新 scratch 带配置根归属。旧 scratch 缺少归属时显示 skipped，可通过重新附着认领，或显式执行 `tdev post-install --adopt-legacy-scratch` 批量认领当前 tmux server 上尚无归属的 scratch。
+
+tmux 迁移保留进程、窗口和提醒，直接更新标题；配置版本高于当前支持值时保留并报告兼容错误。首次开启焦点事件后，已附着终端需重新附着，报告中的 reattach_required 标记该要求。daemon 程序摘要相同时保持现有进程，变化时重启并恢复连接；已停止的 daemon 保持停止。
+
+旧客户端首次升级后仍执行旧升级流程，需运行安装后的目标路径执行 post-install。回滚目标缺少 post-install 支持时，回滚结果为部分成功；该版本的后续处理需按其兼容说明执行，已有较新 tmux 配置保留。直接解包或外部包管理器安装后，也可显式调用 post-install。

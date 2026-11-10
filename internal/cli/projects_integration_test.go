@@ -66,7 +66,12 @@ func TestClientProjectManagement(t *testing.T) {
 	draft, _ := json.Marshal(p)
 	run(string(draft), 0, "edit", "fixture/second", "--stdin", "--expected-revision", fmt.Sprint(p.Revision))
 	run(string(draft), 4, "edit", "fixture/second", "--stdin", "--expected-revision", fmt.Sprint(p.Revision))
-	run("", 0, "forward", "add", "second", "-L", "8080:localhost:8000", "-R", "9000:localhost:3000")
+	p, _ = store.Get("second")
+	l, _ := config.ParseForward("L", "8080:localhost:8000")
+	r, _ := config.ParseForward("R", "9000:localhost:3000")
+	p.Forwards = []config.Forward{l, r}
+	draft, _ = json.Marshal(p)
+	run(string(draft), 0, "edit", "second", "--stdin", "--expected-revision", fmt.Sprint(p.Revision))
 	p, err = store.Get("second")
 	if err != nil || len(p.Forwards) != 2 || p.Forwards[1].Direction != "R" {
 		t.Fatal(p, err)
@@ -83,7 +88,10 @@ func TestClientProjectManagement(t *testing.T) {
 	encoded, _ := json.Marshal(p)
 	run(string(encoded), 0, "edit", "second", "--stdin", "--expected-revision", fmt.Sprint(p.Revision))
 	run(string(encoded), 4, "edit", "second", "--stdin", "--expected-revision", fmt.Sprint(p.Revision))
-	run("", 0, "forward", "remove", "second", "--id", p.Forwards[1].ID)
+	p, _ = store.Get("second")
+	p.Forwards = p.Forwards[:1]
+	draft, _ = json.Marshal(p)
+	run(string(draft), 0, "edit", "second", "--stdin", "--expected-revision", fmt.Sprint(p.Revision))
 
 	// The standalone wizard also targets an explicitly selected saved server.
 	create := terminalCLI(t, binary, root, s.Config, "create", "--server", "fixture")

@@ -243,6 +243,15 @@ func TestUpgradeWithActiveSSHAndForwards(t *testing.T) {
 		if !strings.Contains(stderr.String(), "端口映射可能短暂中断") {
 			t.Fatalf("missing upgrade notice with --json/-y: %s", stderr.String())
 		}
+		if want == 0 {
+			encoded, _ := json.Marshal(response.Data)
+			var installed struct {
+				PostInstall postInstallReport `json:"post_install"`
+			}
+			if json.Unmarshal(encoded, &installed) != nil || len(installed.PostInstall.Hooks) != 2 {
+				t.Fatalf("upgrade/rollback omitted target hooks: %s", encoded)
+			}
+		}
 		return stderr.String()
 	}
 	assertSession := func() {
@@ -282,6 +291,14 @@ func TestUpgradeWithActiveSSHAndForwards(t *testing.T) {
 			if rollback {
 				args, version = []string{"--remote", "fixture", "--rollback"}, "0.4.1"
 			}
+			for _, command := range [][]string{
+				{"set-option", "-u", "-t", original.SessionID, "@tdev_runtime_config_version"},
+				{"set-option", "-t", original.SessionID, "set-titles-string", "legacy-remote-title"},
+			} {
+				if out, err := exec.Command("tmux", m.Args(command...)...).CombinedOutput(); err != nil {
+					t.Fatalf("prepare old runtime: %v %s", err, out)
+				}
+			}
 			notice := runUpgrade(0, "", args...)
 			if !strings.Contains(notice, "tdev open fixture/<项目名>") || !strings.Contains(notice, "协议不兼容") {
 				t.Fatal("missing remote reconnect instructions", notice)
@@ -294,6 +311,10 @@ func TestUpgradeWithActiveSSHAndForwards(t *testing.T) {
 			}
 			waitFor("forward after remote replacement", forwardWorks)
 			assertSession()
+			waitFor("remote hook updates live OSC title", func() bool {
+				parts := strings.Split(terminal.output.String(), "\x1b]0;")
+				return len(parts) > 1 && strings.HasPrefix(parts[len(parts)-1], original.SessionName+":main\a")
+			})
 			offset := len(terminal.output.String())
 			s.Offline(true)
 			waitFor("disconnect detected after remote replacement", func() bool { return strings.Contains(terminal.output.String()[offset:], "Connection lost.") })

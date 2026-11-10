@@ -20,6 +20,7 @@ import (
 	"tdev/internal/protocol"
 	"tdev/internal/reconnect"
 	"tdev/internal/sshx"
+	"tdev/internal/transfer"
 )
 
 type connection struct {
@@ -41,6 +42,7 @@ type managedForward struct {
 }
 
 type supervisor struct {
+	binarySHA256    string
 	client          Client
 	ctx             context.Context
 	stop            context.CancelFunc
@@ -96,6 +98,9 @@ func (c Client) Serve(ctx context.Context, services ...func(context.Context, Req
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	s := &supervisor{client: c, ctx: ctx, stop: cancel, connections: map[string]*connection{}, forwards: map[string]*managedForward{}, desired: map[string]Request{}}
+	if executable, e := os.Executable(); e == nil {
+		s.binarySHA256, _ = transfer.Hash(executable)
+	}
 	s.leases = map[string]*lease{}
 	s.mounts = map[string]*managedMount{}
 	s.channels = map[string]Allocation{}
@@ -164,6 +169,9 @@ func (s *supervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			state, err = s.lookup(req)
 		case "forward":
 			state, err = s.startForwards(r.Context(), req)
+		case "forward-stop":
+			err = s.stopTemporaryForwards(req)
+			state = s.status()
 		case "lease-start":
 			err = s.beginLease(req.Owner)
 			state = State{Protocol: Protocol}
@@ -208,6 +216,8 @@ func (s *supervisor) status() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state := State{Protocol: Protocol, PID: os.Getpid(), Connections: len(s.connections), Forwards: []ForwardState{}}
+	state.BinarySHA256 = s.binarySHA256
+	state.TemporaryForwards = true
 	state.Warnings = append([]string(nil), s.warnings...)
 	for _, f := range s.forwards {
 		state.Forwards = append(state.Forwards, f.state)
@@ -350,6 +360,19 @@ func (s *supervisor) watch(e *connection) {
 }
 
 func (s *supervisor) startForwards(ctx context.Context, req Request) (State, error) {
+	return s.runForwards(ctx, req, true)
+}
+
+func (s *supervisor) runForwards(ctx context.Context, req Request, rollback bool) (result State, resultErr error) {
+	// Roll back a temporary group if any listener fails, including cancelled startup.
+	defer func() {
+		if rollback && resultErr != nil && strings.HasPrefix(req.Name, "forward-") && config.ValidName(req.Name) && config.ValidName(req.Server) {
+			_ = s.stopTemporaryForwards(req)
+		}
+	}()
+	if req.Name != "" && (!strings.HasPrefix(req.Name, "forward-") || !config.ValidName(req.Name) || !config.ValidName(req.Server)) {
+		return State{}, config.Invalid("invalid temporary forward identity")
+	}
 	s.forwardMu.Lock()
 	defer s.forwardMu.Unlock()
 	if !req.Local {
@@ -378,6 +401,9 @@ func (s *supervisor) startForwards(ctx context.Context, req Request) (State, err
 	}
 	for _, f := range req.Forwards {
 		key := identity(req) + "/" + f.Direction + "/" + f.Spec()
+		if req.Name != "" {
+			key += "/" + req.Server + "/" + req.Name
+		}
 		e := s.forwards[key]
 		if e == nil || e.finished {
 			owners := map[string]bool{}
@@ -394,7 +420,7 @@ func (s *supervisor) startForwards(ctx context.Context, req Request) (State, err
 			} else {
 				g = forward.Start(s.ctx, req.Alias, opts, []config.Forward{f}, req.Policy)
 			}
-			e = &managedForward{request: req, group: g, ready: make(chan struct{}), state: ForwardState{Spec: "-" + f.Direction + " " + f.Spec(), State: "connecting"}, owners: owners, durable: durable}
+			e = &managedForward{request: req, group: g, ready: make(chan struct{}), state: ForwardState{Name: req.Name, Server: req.Server, Spec: "-" + f.Direction + " " + f.Spec(), State: "connecting"}, owners: owners, durable: durable}
 			s.forwards[key] = e
 			s.wg.Add(1)
 			go s.forwardEvents(e)
@@ -469,7 +495,7 @@ func (s *supervisor) restore() error {
 			case "acquire":
 				_, _ = s.acquire(req)
 			case "forward":
-				_, _ = s.startForwards(s.ctx, req)
+				_, _ = s.runForwards(s.ctx, req, false)
 			}
 		}()
 	}
@@ -492,4 +518,28 @@ func (s *supervisor) forwardEvents(e *managedForward) {
 	e.finished = true
 	s.mu.Unlock()
 	ready.Do(func() { close(e.ready) })
+}
+
+// stopTemporaryForwards removes only a named temporary group and its recovery registration.
+func (s *supervisor) stopTemporaryForwards(req Request) error {
+	if !strings.HasPrefix(req.Name, "forward-") || !config.ValidName(req.Name) || !config.ValidName(req.Server) {
+		return config.Invalid("invalid temporary forward identity")
+	}
+	s.forwardMu.Lock()
+	defer s.forwardMu.Unlock()
+	s.mu.Lock()
+	var groups []*forward.Group
+	for key, e := range s.forwards {
+		if e.request.Name == req.Name && e.request.Server == req.Server {
+			delete(s.forwards, key)
+			delete(s.desired, key)
+			groups = append(groups, e.group)
+		}
+	}
+	err := s.save()
+	s.mu.Unlock()
+	for _, g := range groups {
+		g.Close()
+	}
+	return err
 }

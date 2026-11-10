@@ -3,13 +3,71 @@ package update
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"tdev/internal/config"
+	"tdev/internal/protocol"
 )
+
+func TestActivationRunsAfterCommitUnderLockAndCanRetry(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	ctx := context.Background()
+	store := config.Store{Root: t.TempDir()}
+	destination := filepath.Join(t.TempDir(), "tdev")
+	dir, pub := releaseFixture(t, "0.1.0")
+	first, err := Load(ctx, dir, "", pub, "0.1.0", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if _, err = Install(ctx, store, first, destination); err != nil {
+		t.Fatal(err)
+	}
+	dir, pub = releaseFixture(t, "0.1.1")
+	second, err := Load(ctx, dir, "", pub, "0.1.1", runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	calls := 0
+	hook := func(ctx context.Context, path string) error {
+		calls++
+		if err := Candidate(ctx, path, "0.1.1"); err != nil {
+			t.Fatal("target not installed before hook", err)
+		}
+		lockCtx, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
+		defer cancel()
+		if unlock, err := (config.Store{Root: StateRoot()}).Lock(lockCtx, lockKey(path), "install"); err == nil {
+			unlock()
+			t.Fatal("installation lock released before hook")
+		}
+		if calls == 1 {
+			return errors.New("retryable activation failure")
+		}
+		return nil
+	}
+	r, err := Install(ctx, store, second, destination, hook)
+	if err == nil || protocol.Normalize(err).Code != "PARTIAL_SUCCESS" || r.PreviousPath == "" {
+		t.Fatalf("committed installation lost: %+v %v", r, err)
+	}
+	before, _ := os.Stat(destination)
+	if _, err = Install(ctx, store, second, destination, hook); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.Stat(destination)
+	if calls != 2 || !os.SameFile(before, after) {
+		t.Fatal("identical-content activation retry failed")
+	}
+	called := false
+	if _, err = Rollback(ctx, store, destination, func(ctx context.Context, path string) error { called = true; return Candidate(ctx, path, "0.1.0") }); err != nil || !called {
+		t.Fatalf("rollback target activation: %v", err)
+	}
+}
 
 func TestIdenticalInstallPreservesFilesAndRollback(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())

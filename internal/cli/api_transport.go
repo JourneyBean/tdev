@@ -62,6 +62,9 @@ func apiCapability(args []string) string {
 		}
 		return "transfer-v1"
 	case "binary":
+		if len(args) > 1 && args[1] == "post-install" {
+			return "post-install-v1"
+		}
 		return "binary-install-v1"
 	case "mount-probe":
 		return "mount-probe-nfc-v1"

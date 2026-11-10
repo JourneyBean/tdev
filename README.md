@@ -4,10 +4,10 @@
 选择已有连接或填写服务器地址，读取目标设备的项目配置，随后打开项目继续开发。
 复用系统 OpenSSH 和 tmux，远端无需数据库、HTTP API 或常驻 tdev 服务。
 
-当前源码版本为 `0.5.0`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
+当前源码版本为 `0.6.0`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
 挂载、本地连接 daemon、功能选择、签名安装升级和回滚。设计基线见[产品与技术设计](docs/design.md)，实现取舍见
 [开发记录](docs/development.md)，实际通过与尚未实测的场景见[第一版验收记录](docs/acceptance.md)。
-版本变更见[发布说明](docs/releases/v0.5.0.md)。二进制 Release 位于
+版本变更见[发布说明](docs/releases/v0.6.0.md)。二进制 Release 位于
 [GitHub](https://github.com/JourneyBean/tdev/releases)。
 
 ## 安装
@@ -21,6 +21,8 @@ curl -fsSL https://github.com/JourneyBean/tdev/releases/latest/download/install.
 打开新终端，或执行安装器输出的 PATH 命令即可使用。支持 `--no-modify-path`，也可以单独运行 `tdev path --write`。
 
 [四平台二进制下载、手动安装和签名校验](docs/installation.md)
+
+安装、升级和回滚会调用目标版本的 post-install hooks，迁移当前配置的运行中 tmux 会话，并按需刷新运行中的 daemon。相同内容重装也会补跑；失败返回部分成功，保留安装结果。可用 `tdev post-install` 重试，远端使用 `tdev post-install --remote dev`。旧客户端首次升级后需手动补跑一次。详见[安装后处理](docs/installation.md#安装后处理)。
 
 ## Shell 命令补全
 
@@ -99,14 +101,12 @@ tdev create dev/demo --directory /home/developer/projects/demo
 tdev show dev/demo
 tdev edit dev/demo
 tdev edit dev/demo --directory /home/developer/projects/new-demo
-tdev forward add dev/demo -L 3000:localhost:3000 -L 8000:localhost:8000
-tdev forward remove dev/demo --id FORWARD_ID
 tdev override dev/demo --forward FORWARD_ID --local-port 18000
 ```
 
 create 和 edit 复用逐项向导，edit 预填已有值：项目目录、启动窗口、端口映射及保存确认。目录应已存在，支持绝对路径、`~/路径` 与 Tab 补全。初始窗口默认为 `main`。输入支持方向键、Home/End 和删除，兼容 UTF-8、空格与引号。
 
-添加映射时选择 L/R，直接输入 `localhost:8000`、`service.internal:3000` 或 `[::1]:8000`。监听端口默认取服务端口。远端 L 映射的默认监听端口保存在项目定义，当前客户端的端口调整单独保存为 override。可连续添加或跳过。保存配置后，open 或 forward 建立实际监听。
+添加映射时选择 L/R，直接输入 `localhost:8000`、`service.internal:3000` 或 `[::1]:8000`。监听端口默认取服务端口。远端 L 映射的默认监听端口保存在项目定义，当前客户端的端口调整单独保存为 override。可连续添加或跳过。项目转发的增、删、改统一使用 `edit`；保存后通过 `open` 或 `open --only forward` 建立监听。
 
 配置修改检查 revision 并保留备份。完整替换使用 `edit --stdin --expected-revision N`，输入为 show 的 `definition` 对象。show 同时展示原始定义、override 与最终生效配置。窗口启动命令在新建会话时执行。
 
@@ -285,11 +285,14 @@ tdev override demo --reset               # 恢复远端默认值
 `api` 是远端映射的稳定 ID，可从 `tdev show` 查看。项目目录、窗口和命令实时读取，本机只保存端口差异及附加转发。
 
 ```sh
-tdev forward demo -L 3000:localhost:8000
-tdev forward add demo -L 8000:localhost:8000
-tdev override demo --forward FORWARD_ID --local-port 8080
-tdev forward add demo -R 9000:localhost:3000
-tdev forward demo
+tdev forward dev -L 3000:localhost:8000          # 等监听就绪后返回，后台保留
+tdev forward dev -R 9000:localhost:3000
+tdev forward dev -L 8000 --foreground          # 前台运行，Ctrl-C 释放
+tdev forward local -L 8080:localhost:8000       # 本机 TCP 转发
+tdev ls --type forward
+tdev stop dev/forward-NAME -y                  # 使用 ls 中的名称
+tdev edit dev/demo                            # 修改项目保存的转发
+tdev open dev/demo --only forward              # 后台运行项目预设
 ```
 
 与 OpenSSH 一致，`-L` 本机监听、`-R` 远端监听，均为
@@ -298,9 +301,9 @@ tdev forward demo
 
 每条映射拥有独立 SSH master 和私有控制 socket；通过 OpenSSH 控制请求确认监听
 建立后才报告 ready。端口冲突不接管其他连接，失败和重连互相隔离。
-`forward add/remove` 保存或移除共享定义，`override` 调整当前客户端的监听参数。`forward <项目>` 使用保存的映射；显式 -L/-R 只为本次运行建立监听。项目参数始终按项目名解析，包括纯数字名称。
+`forward [server]` 要求显式提供至少一条 `-L/-R`，按 server 解析参数。省略 server 时，配置了远端的交互终端提供选择；非交互调用需显式指定。只有本机时默认 local。每次运行生成 `forward-…` 名称，多条规则组成一组，在 `ls` 中以 forward 类型列出，可通过 `stop server/name` 整组停止。临时规则保存在当前客户端的 daemon 恢复登记中。项目共享规则由 `edit` 修改，`override` 调整当前客户端的监听偏好。
 
-前台 forward 的隧道归当前命令所有。open 的转发由 daemon 管理，带 shell 时按使用权释放，只选 forward 时后台保留。后台状态通过 `tdev daemon status` 查询。
+默认 forward 等监听建立成功后返回，由 daemon 后台维持；`--foreground` 持有使用权直到命令退出，Ctrl-C 释放本次转发。启动批次中任何规则失败时清理整组。`daemon restart` 恢复后台转发，`daemon stop` 清除恢复登记。临时转发在当前客户端的 `ls` 和 `daemon status` 中可见。open 带 shell 时按使用权释放转发，只选 forward 时后台保留。
 ready 表示 SSH 监听已建立；应用健康由应用自身检查。
 
 ## 传输与挂载

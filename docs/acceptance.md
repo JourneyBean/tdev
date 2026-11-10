@@ -1,8 +1,16 @@
 # 开发验收记录
 
-Last verified: 2026-11-10。源码版本：0.5.0。下表保留集成验收使用的开发版版本号。
+Last verified: 2026-11-10。源码版本：0.6.0。下表保留集成验收使用的开发版版本号。
 
 本记录汇总第一版核心功能的自动化验证、环境实测和待验证项。
+
+## v0.6.0 版本验收
+
+2026-11-10：源码、Makefile、README 与发布说明统一为 0.6.0。`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s -json ./...` 全部通过，含子测试 269 项；CLI 211.029 秒、daemon 3.231 秒、真实隔离 tmux 13.224 秒、updater 7.555 秒。覆盖签名安装后处理及重试、活跃终端配置迁移、升级回滚、服务器临时 L/R 转发、后台恢复、前台退出清理和项目映射编辑。`make check`、Linux/macOS amd64/arm64 四平台 `make cross` 与 `make build` 通过；临时配置下构建产物 JSON version 返回 0.6.0、post-install-v1，协议及项目 schema 均为 1。
+
+原生环境为 Linux amd64、Go 1.27.3、tmux 3.6、OpenSSH 10.2。测试使用临时配置和状态根、临时 SSH 身份、私有 tmux socket 与 `/dev/null` 配置；fish 未安装，对应子测试跳过。macOS 原生交互、OpenSSH 10.3+ 实际通道、真实历史发布包回滚及 FUSE 等覆盖边界见本记录对应章节。
+
+公开文件、文件名与四平台二进制扫描未发现凭据或内部环境信息泄漏。五处模式命中经复核为既有产品迁移名称与通用测试路径；提交与标签使用公开 noreply 身份。
 
 ## v0.5.0 版本验收
 
@@ -356,3 +364,31 @@ daemon 回归验证操作取消后移除登记、跨目录 socket 和任意用�
 最终 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，含子测试 248 项：CLI 172.516 秒、daemon 2.802 秒、真实 tmux 8.927 秒。升级、daemon restart、双向转发与连续断线重连回归一并通过。`make check`、Linux/macOS amd64/arm64 四平台 `make cross` 与 `make build` 通过。构建产物使用临时配置运行 JSON `ps --server local`，无 daemon 时返回空数组、退出 0，配置目录保持为空。fish 未安装，对应 shell 路径子测试跳过。
 
 原生环境为 Linux amd64、Go 1.27.3、tmux 3.6、OpenSSH 10.2；实际通道查询在该 OpenSSH 版本不可用，API、终端及安装引导的 tdev 分配登记已实测。其他环境与实际通道原生验证边界见“尚未完成的环境或人工验收”。
+
+## SSH 扩展通道类型解析（2026-11-10）
+
+回归夹具复现旧解析器将 `session:command`、`session:shell`、`session:subsystem:sftp` 判为 `unrecognized`。修复后混合会话、mux 控制和 TCP 通道的报告可解析，保留基础类型、状态及缓冲字节，过滤 mux 控制、原始描述和自定义子系统参数。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过：CLI 176.051 秒、真实隔离 tmux 9.183 秒。`make check` 和 Linux/macOS amd64/arm64 四平台 `make cross` 通过。测试使用临时配置、生成的 SSH 身份和私有 tmux socket。原生 OpenSSH 为 10.2，扩展通道报告使用格式夹具验证；OpenSSH 10.3+ 与 macOS 原生通道查询仍待环境实测。
+
+## 安装后处理与 tmux 配置迁移（2026-11-10）
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过：CLI 207.250 秒、daemon 3.148 秒、真实 tmux 14.635 秒、updater 8.608 秒。`go vet ./...`、`gofmt -l cmd internal`、`git diff --check`、安装脚本语法检查、四平台 `make cross` 与 `make build` 通过。构建产物返回版本 0.5.0、协议及项目 schema 1，并声明 post-install-v1。
+
+新增签名安装回归验证全新目标路径安装时迁移已有活跃 PTY；报告版本来自目标程序，实时 OSC 标题更新，pane ID、PID 与 session generation 保留。相同内容的 API 重装保持二进制 inode 并补跑迁移。未来 runtime schema 返回 PARTIAL_SUCCESS，目标二进制保留，后续 daemon hook 仍执行；显式 post-install 可重试。现有真实 SSH 升级/回滚回归增加目标 hooks 报告及远端活跃 OSC 标题断言，继续验证旧附着进程、原会话、端口映射恢复、同内容升级与 daemon 停止状态。
+
+真实隔离 tmux 回归验证：旧版重复 hook 去重，用户 hook 和继承动作保留，索引冲突避让，迁移保留焦点及未读 bell 标记；构造 hook 已写入而版本未提交的现场后重试保持幂等，用户占用已登记索引时保留配置并报错。并发重试、两个配置根并发认领同一旧 scratch、其他配置根保护、显式旧 scratch 认领、普通 session 保留及未来 schema 保护通过。无 tmux server 时处理保持无 server 状态，损坏项目配置单独报告失败。updater 回归验证目标提交及安装锁持有期间执行处理，hook 失败后的同内容重试、回滚目标处理及回滚备份保留。
+
+测试使用临时配置和状态根、唯一 tmux socket 与 `/dev/null` 配置；SSH 身份位于临时目录。当前工作区包含既有 SSH 通道解析修改。实现前的版本门控调研协议与原始记录保存在仓库本地 `.summary-web/evidence/runtime-upgrade-*`。
+
+覆盖边界：签名升级夹具的不同程序版本由当前源码注入版本号构建，未来 schema 用较高标记模拟；真实历史发布包缺少 post-install 入口的回滚、后续实际 schema 逆迁移、迁移中进程强杀及不同用户状态根共享同一 tmux server 待进一步验证。macOS 原生终端、其他 tmux 版本的旧 hook 规范化输出、多客户端焦点竞争及首次开启焦点上报后的真实终端交互继续沿用前文边界。旧客户端首次升级通过新版 post-install 补跑；缺少归属的旧 scratch 需显式附着或认领。
+
+## 服务器临时转发（2026-11-10）
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 300s ./...` 全部通过：CLI 209.234 秒、daemon 3.462 秒、真实隔离 tmux 14.051 秒。`make check`、Linux/macOS amd64/arm64 四平台 `make cross` 与 `make build` 通过。最终构建产物的 forward、ls、stop 帮助输出使用临时配置核对，包含 server 参数、foreground 开关和临时转发管理入口。
+
+真实隔离 OpenSSH 与本机 TCP 用例覆盖：无项目时创建临时 L/R 转发、命令返回后持续 echo、普通 ls 与 ls --type forward 展示、批次端口冲突回收已成功的监听且保留原组、daemon restart 后恢复、按名称 stop 及随后 restart 保持已删除状态。前台用例覆盖本机与远端 SSH、超过普通非交互 timeout 后继续运行、Ctrl-C 返回 130、进程强杀后使用权回收与监听关闭；强杀清理以实际端口关闭作为完成条件。专项重复两轮通过。daemon 用例验证恢复时监听失败仍保留后台登记，显式停止后清除登记。
+
+项目配置回归使用 edit --stdin 验证添加、修改目标并保持映射 ID、删除映射及对应客户端 override 清理；真实 SSH 项目管理和拒绝 session status 的远端夹具同步使用 edit 修改映射。参数用例拒绝缺少规则、重复监听、project 路径充当 server 及旧 add/remove 入口。服务器名称补全与既有 override ID 补全回归通过。
+
+覆盖边界：原生执行于 Linux，测试配置、SSH 身份、状态根与 tmux socket 均隔离。macOS 验证为交叉构建，原生网络与终端行为沿用前文待验收范围。临时转发状态来自当前客户端 daemon；前台组随命令或 daemon 结束释放，后台组支持 daemon restart 恢复。

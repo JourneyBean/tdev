@@ -69,7 +69,7 @@ servers:
 	}
 }
 
-func TestForwardRetiredFlagsAndNumericProject(t *testing.T) {
+func TestForwardRetiredFlagsAndRequiredRules(t *testing.T) {
 	t.Setenv("TMUX", "")
 	root := t.TempDir()
 	store := config.Store{Root: root}
@@ -87,8 +87,8 @@ func TestForwardRetiredFlagsAndNumericProject(t *testing.T) {
 		}
 	}
 	code, response := run(t, root, "", "forward", "8000")
-	if code != 2 || response.Error == nil || response.Error.Code != "INVALID_CONFIG" || !strings.Contains(response.Error.Message, "project has no saved forwards") {
-		t.Fatalf("numeric project was treated as a port: %d %+v", code, response)
+	if code != 2 || response.Error == nil || response.Error.Code != "INVALID_CONFIG" || !strings.Contains(response.Error.Message, "at least one -L or -R") {
+		t.Fatalf("forward accepted missing rules: %d %+v", code, response)
 	}
 	after, err := os.ReadFile(filepath.Join(root, "projects", "8000.yaml"))
 	if err != nil || string(before) != string(after) {

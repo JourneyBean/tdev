@@ -42,3 +42,25 @@ func TestInspectUnsupportedChannelsPreservesMasterState(t *testing.T) {
 		t.Fatalf("%+v", i)
 	}
 }
+
+func TestParseChannelsExtendedSessionTypes(t *testing.T) {
+	for _, xtype := range []string{"session:command", "session:shell", "session:subsystem:sftp", "session:subsystem:PRIVATE_SUBSYSTEM --private-argument"} {
+		t.Run(xtype, func(t *testing.T) {
+			report := "The following connections are open:\r\n" +
+				"  #0 local (t16 [mux-control] nr0 nm0 i0/0 o0/0 e[closed]/0 fd 6/6/-1 sock 6 cc -1)\r\n" +
+				"  #1 PRIVATE_COMMAND (t4 [" + xtype + "] r1 nm0 i0/12 o1/34 e[write]/0 fd 3/4/5 sock -1 cc 0)\r\n" +
+				"  #2 private address (t4 [direct-tcpip] r2 nm0 i0/0 o0/0 e[closed]/0 fd 7/7/-1 sock 7 cc -1)\r\n"
+			channels, status := parseChannels(report)
+			if status != "available" || len(channels) != 2 {
+				t.Fatalf("unexpected channel snapshot: %+v %s", channels, status)
+			}
+			if got := channels[0]; got.ID != 1 || got.Type != "session" || got.State != "open" || got.InputBytes != 12 || got.OutputState != 1 || got.OutputBytes != 34 {
+				t.Fatalf("unexpected session: %+v", got)
+			}
+			b, err := json.Marshal(channels)
+			if err != nil || strings.Contains(string(b), "PRIVATE") || strings.Contains(string(b), "private") {
+				t.Fatal("channel descriptions or subsystem arguments leaked")
+			}
+		})
+	}
+}

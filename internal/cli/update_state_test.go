@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,39 +16,30 @@ import (
 	"tdev/internal/update"
 )
 
-func TestUpgradeDaemonRestartFailureRetainsInstallationResult(t *testing.T) {
+func TestPostInstallContinuesAfterTmuxFailure(t *testing.T) {
 	root := t.TempDir()
+	// A malformed projects directory makes the first hook fail before tmux access.
+	if err := os.WriteFile(filepath.Join(root, "projects"), []byte("invalid"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	client, err := daemon.New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(client.Dir) })
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- client.Serve(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
-	for {
-		if _, err := client.Call(ctx, daemon.Request{Op: "status"}); err == nil {
-			break
-		}
-		if ctx.Err() != nil {
-			t.Fatal("daemon did not start")
-		}
-		time.Sleep(10 * time.Millisecond)
+	a := &app{store: config.Store{Root: root}, timeout: time.Second}
+	report, err := a.postInstall(context.Background(), false)
+	if err == nil || protocol.Normalize(err).Code != "PARTIAL_SUCCESS" || len(report.Hooks) != 2 || report.Hooks[0].Status != "failed" || report.Hooks[1].Status != "succeeded" {
+		t.Fatalf("hooks did not finish independently: %+v %v", report, err)
 	}
-	var stdout bytes.Buffer
-	a := &app{store: config.Store{Root: root}, timeout: 5 * time.Second, out: &stdout, json: true}
-	installed := update.Receipt{Version: "0.4.2", Destination: "/managed/tdev"}
-	err = a.finishUpgrade(ctx, filepath.Join(t.TempDir(), "missing-executable"), true, installed, nil)
-	failure := protocol.Normalize(err)
-	if failure.Code != "PARTIAL_SUCCESS" || failure.Exit != 9 || failure.Details != installed || stdout.Len() != 0 {
-		t.Fatalf("restart failure lost committed installation result: %+v stdout=%s", failure, stdout.String())
+	if _, err := client.Call(context.Background(), daemon.Request{Op: "status"}); protocol.Normalize(err).Code != "DAEMON_UNAVAILABLE" {
+		t.Fatalf("post-install started stopped daemon: %v", err)
 	}
-	// Rejected installation must not attempt daemon management or write success.
-	rejected := update.VerifyError("invalid signature")
-	if err := a.finishUpgrade(ctx, installed.Destination, true, installed, rejected); err != rejected || stdout.Len() != 0 {
-		t.Fatalf("rejected installation: %v stdout=%s", err, stdout.String())
+	installed := update.Receipt{Version: "0.5.0", Destination: "/managed/tdev"}
+	_, failure := finishInstallation(installed, nil, err, protocol.Fail("PARTIAL_SUCCESS", 9, "hooks failed"))
+	encoded, _ := json.Marshal(protocol.Normalize(failure).Details)
+	if !bytes.Contains(encoded, []byte(`"destination":"/managed/tdev"`)) || !bytes.Contains(encoded, []byte(`"post_install"`)) {
+		t.Fatalf("installation details lost: %s", encoded)
 	}
 }
 

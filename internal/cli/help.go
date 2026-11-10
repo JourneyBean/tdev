@@ -15,7 +15,7 @@ func (a *app) commandHelp() {
 		switch c.Name() {
 		case "api":
 			c.GroupID = "protocol"
-		case "setup", "override", "doctor", "version", "install", "upgrade", "path", "completion", "daemon", "ps", "help":
+		case "setup", "override", "doctor", "version", "install", "upgrade", "post-install", "path", "completion", "daemon", "ps", "help":
 			c.GroupID = "client"
 		default:
 			c.GroupID = "workspace"

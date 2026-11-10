@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"tdev/internal/config"
+	"tdev/internal/daemon"
 	"tdev/internal/sshx"
 	"tdev/internal/tmux"
 )
@@ -40,7 +41,7 @@ func (a *app) completionCommands() {
 	var register func(*cobra.Command, bool)
 	register = func(c *cobra.Command, local bool) {
 		local = local || c.Name() == "api"
-		if (c.Name() == "open" && !local) || strings.Contains(c.Use, "<project>") || strings.Contains(c.Use, "[project]") || strings.Contains(c.Use, "<server/project>") || strings.HasPrefix(c.Use, "create [server/") {
+		if ((c.Name() == "open" || c.Name() == "stop") && !local) || strings.Contains(c.Use, "<project>") || strings.Contains(c.Use, "[project]") || strings.Contains(c.Use, "<server/project>") || strings.HasPrefix(c.Use, "create [server/") {
 			c.ValidArgsFunction = func(c *cobra.Command, args []string, prefix string) ([]string, cobra.ShellCompDirective) {
 				if len(args) == 0 {
 					if c.Name() == "create" && !local {
@@ -57,7 +58,7 @@ func (a *app) completionCommands() {
 				return nil, cobra.ShellCompDirectiveNoFileComp
 			}
 		}
-		if c.Name() == "scratch" && !local {
+		if (c.Name() == "scratch" || c.Name() == "forward") && !local {
 			c.ValidArgsFunction = func(c *cobra.Command, args []string, prefix string) ([]string, cobra.ShellCompDirective) {
 				if len(args) > 0 {
 					return nil, cobra.ShellCompDirectiveNoFileComp
@@ -117,9 +118,7 @@ func (a *app) completionCommands() {
 		if c.Flags().Lookup("forward") != nil {
 			_ = c.RegisterFlagCompletionFunc("forward", a.completeForwardIDs())
 		}
-		if c.Flags().Lookup("id") != nil && c.Parent().Name() == "forward" && c.Name() != "add" {
-			_ = c.RegisterFlagCompletionFunc("id", a.completeForwardIDs())
-		}
+
 		for _, child := range c.Commands() {
 			register(child, local)
 		}
@@ -237,6 +236,26 @@ func (a *app) completeProjects(c *cobra.Command, prefix string, api bool) ([]str
 		}(t)
 	}
 	seen := map[string]bool{}
+	if c.Name() == "stop" {
+		if client, err := daemon.New(a.store.Root); err == nil {
+			if state, err := client.Call(ctx, daemon.Request{Op: "status"}); err == nil {
+				for _, f := range state.Forwards {
+					if f.Name == "" {
+						continue
+					}
+					values := []string{f.Server + "/" + f.Name}
+					if namespace == "" {
+						values = append(values, f.Name)
+					}
+					for _, value := range values {
+						if strings.HasPrefix(value, prefix) {
+							seen[value] = true
+						}
+					}
+				}
+			}
+		}
+	}
 	for range servers {
 		select {
 		case res := <-results:

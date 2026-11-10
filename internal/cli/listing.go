@@ -16,18 +16,20 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 	"tdev/internal/config"
+	"tdev/internal/daemon"
 	"tdev/internal/protocol"
 	"tdev/internal/tmux"
 )
 
 type serverListing struct {
-	Location       string              `json:"location"`
-	State          string              `json:"state"`
-	UpdatedAt      time.Time           `json:"updated_at,omitempty"`
-	Error          string              `json:"error,omitempty"`
-	Projects       []discoveredProject `json:"projects"`
-	Scratches      []tmux.Scratch      `json:"scratches"`
-	ScratchWarning string              `json:"scratch_warning,omitempty"`
+	Forwards       []daemon.ForwardState `json:"forwards"`
+	Location       string                `json:"location"`
+	State          string                `json:"state"`
+	UpdatedAt      time.Time             `json:"updated_at,omitempty"`
+	Error          string                `json:"error,omitempty"`
+	Projects       []discoveredProject   `json:"projects"`
+	Scratches      []tmux.Scratch        `json:"scratches"`
+	ScratchWarning string                `json:"scratch_warning,omitempty"`
 }
 type projectListing map[string]serverListing
 
@@ -59,8 +61,8 @@ func (a *app) listProjects(ctx context.Context, c *cobra.Command) (any, error) {
 
 func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display bool) (projectListing, error) {
 	kind, _ := c.Flags().GetString("type")
-	if kind != "" && kind != "project" && kind != "scratch" {
-		return nil, config.Invalid("--type must be project or scratch")
+	if kind != "" && kind != "project" && kind != "scratch" && kind != "forward" {
+		return nil, config.Invalid("--type must be project, scratch or forward")
 	}
 	p, err := a.prefs()
 	if err != nil {
@@ -79,6 +81,21 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 		names = []string{selected}
 	}
 	results := projectListing{}
+	// Temporary forwards belong to this client, independent of remote project discovery.
+	client, err := daemon.New(a.store.Root)
+	if err != nil {
+		return nil, err
+	}
+	state, err := client.Call(ctx, daemon.Request{Op: "status"})
+	if err != nil && protocol.Normalize(err).Code != "DAEMON_UNAVAILABLE" {
+		return nil, err
+	}
+	liveForwards := map[string][]daemon.ForwardState{}
+	for _, f := range state.Forwards {
+		if f.Name != "" {
+			liveForwards[f.Server] = append(liveForwards[f.Server], f)
+		}
+	}
 	type response struct {
 		name      string
 		projects  []discoveredProject
@@ -90,14 +107,17 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 	targets := make([]target, 0, len(names))
 	for _, name := range names {
 		t, _ := a.serverTarget(p, name, "")
-		entry := serverListing{Location: "remote", State: "syncing", Projects: []discoveredProject{}, Scratches: []tmux.Scratch{}}
+		entry := serverListing{Forwards: append([]daemon.ForwardState{}, liveForwards[name]...), Location: "remote", State: "syncing", Projects: []discoveredProject{}, Scratches: []tmux.Scratch{}}
 		if t.Local {
 			entry.Location = "local"
 		}
-		if cached, ok := a.loadListingCache(t); ok {
+		if cached, ok := a.loadListingCache(t); ok && kind != "forward" {
 			entry.Projects = cached.Projects
 			entry.Scratches = append([]tmux.Scratch{}, cached.Scratches...)
 			entry.UpdatedAt = cached.UpdatedAt
+		}
+		if kind == "forward" {
+			entry.State = "synced"
 		}
 		results[name] = entry
 		targets = append(targets, t)
@@ -136,6 +156,10 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 	redraw(false)
 	for _, t := range targets {
 		go func(t target) {
+			if kind == "forward" {
+				updates <- response{name: t.Name}
+				return
+			}
 			projects, err := a.discover(ctx, t)
 			r := response{name: t.Name, projects: projects, err: err}
 			if err == nil {
@@ -176,7 +200,9 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 				entry.Projects = []discoveredProject{}
 			}
 			t, _ := a.serverTarget(p, update.name, "")
-			a.saveListingCache(t, entry.Projects, entry.Scratches)
+			if kind != "forward" {
+				a.saveListingCache(t, entry.Projects, entry.Scratches)
+			}
 		}
 		results[update.name] = entry
 		redraw(false)
@@ -206,7 +232,7 @@ func (listing projectListing) print(out io.Writer) error {
 				notes = append(notes, fmt.Sprintf("%s 缓存：%s", name, entry.UpdatedAt.Format(time.RFC3339)))
 			}
 		}
-		if len(entry.Projects) == 0 && len(entry.Scratches) == 0 {
+		if len(entry.Projects) == 0 && len(entry.Scratches) == 0 && len(entry.Forwards) == 0 {
 			rows = append(rows, [6]string{name, "—", "—", entry.State, "—", "—"})
 			if entry.State == "synced" {
 				notes = append(notes, "添加项目：tdev create --server "+name)
@@ -239,6 +265,13 @@ func (listing projectListing) print(out io.Writer) error {
 		}
 		for _, scratch := range entry.Scratches {
 			rows = append(rows, [6]string{name, scratch.Name, "scratch", scratch.Status.Status, scratch.Directory, "—"})
+		}
+		for _, f := range entry.Forwards {
+			status := f.State
+			if f.Error != "" {
+				notes = append(notes, name+"/"+f.Name+": "+f.Error)
+			}
+			rows = append(rows, [6]string{name, f.Name, "forward", status, "—", f.Spec})
 		}
 	}
 	if err := printListingTable(out, rows); err != nil {
@@ -301,12 +334,15 @@ func printListingTable(out io.Writer, rows [][6]string) error {
 func filterListing(listing projectListing, kind string) projectListing {
 	result := projectListing{}
 	for name, entry := range listing {
-		if kind == "scratch" {
+		if kind == "scratch" || kind == "forward" {
 			entry.Projects = []discoveredProject{}
 		}
-		if kind == "project" {
+		if kind == "project" || kind == "forward" {
 			entry.Scratches = []tmux.Scratch{}
 			entry.ScratchWarning = ""
+		}
+		if kind != "" && kind != "forward" {
+			entry.Forwards = []daemon.ForwardState{}
 		}
 		result[name] = entry
 	}

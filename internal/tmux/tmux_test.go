@@ -16,6 +16,7 @@ import (
 
 func fixture(t *testing.T) (Manager, config.Project, context.Context) {
 	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux integration requires tmux")
 	}

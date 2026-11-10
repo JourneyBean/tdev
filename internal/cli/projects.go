@@ -128,6 +128,28 @@ func (a *app) projectCommands() {
 		if err != nil {
 			return nil, err
 		}
+		kept := map[string]bool{}
+		for _, f := range p.Forwards {
+			kept[f.ID] = true
+		}
+		if override.ProjectID == "" {
+			current := t.Server.Projects[p.Name]
+			if current.ProjectID == p.ID {
+				for id := range current.Forwards {
+					if !kept[id] {
+						override = cloneOverride(current)
+						break
+					}
+				}
+			}
+		}
+		if override.ProjectID == p.ID {
+			for id := range override.Forwards {
+				if !kept[id] {
+					delete(override.Forwards, id)
+				}
+			}
+		}
 		if override.ProjectID != "" {
 			if err = a.saveOverride(ctx, t, p, func(o *projectOverride) error { *o = override; return nil }); err != nil {
 				return nil, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "project saved; client overrides could not be saved: " + err.Error()}

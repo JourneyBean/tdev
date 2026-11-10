@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,14 +77,21 @@ func TestProjectOperationsDoNotQuerySessionStatus(t *testing.T) {
 		executeBinary(t, binary, root, s.Config, "", 0, "override", "demo")
 		executeBinary(t, binary, root, s.Config, "", 0, "create", "dev/config-only", "--directory", directory)
 		executeBinary(t, binary, root, s.Config, "", 0, "edit", "config-only", "--directory", directory)
-		executeBinary(t, binary, root, s.Config, "", 0, "forward", "add", "config-only", "-L", "8080:localhost:8000")
+		draft, _ := store.Get("config-only")
+		f, _ := config.ParseForward("L", "8080:localhost:8000")
+		draft.Forwards = []config.Forward{f}
+		encoded, _ := json.Marshal(draft)
+		executeBinary(t, binary, root, s.Config, string(encoded), 0, "edit", "config-only", "--stdin", "--expected-revision", fmt.Sprint(draft.Revision))
 		project, err := store.Get("config-only")
 		if err != nil || len(project.Forwards) != 1 {
 			t.Fatal("forward definition", project, err)
 		}
 		id := project.Forwards[0].ID
 		executeBinary(t, binary, root, s.Config, "", 0, "override", "config-only", "--forward", id, "--local-port", "18080")
-		executeBinary(t, binary, root, s.Config, "", 0, "forward", "remove", "config-only", "--id", id)
+		project.Forwards = nil
+		encoded, _ = json.Marshal(project)
+		executeBinary(t, binary, root, s.Config, string(encoded), 0, "edit", "config-only", "--stdin", "--expected-revision", fmt.Sprint(project.Revision))
+		executeBinary(t, binary, root, s.Config, "", 0, "override", "config-only")
 		output, err := exec.Command(binary, "--config-dir", root, "--ssh-config", s.Config, "__complete", "show", "dev/d").CombinedOutput()
 		if err != nil || !strings.Contains(string(output), "dev/demo") {
 			t.Fatalf("project completion: %v %s", err, output)

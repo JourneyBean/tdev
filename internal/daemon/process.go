@@ -11,6 +11,7 @@ import (
 	"tdev/internal/config"
 	"tdev/internal/protocol"
 	"tdev/internal/reconnect"
+	"tdev/internal/transfer"
 )
 
 // Manage serializes lifecycle operations from independent CLI processes.
@@ -45,6 +46,15 @@ func (c Client) Manage(ctx context.Context, op, executable, root string) (State,
 		}
 		if probeErr != nil && protocol.Normalize(probeErr).Code == "DAEMON_UNAVAILABLE" {
 			return State{Protocol: Protocol}, nil
+		}
+		if probeErr == nil && state.BinarySHA256 != "" {
+			hash, err := transfer.Hash(executable)
+			if err != nil {
+				return State{}, err
+			}
+			if hash == state.BinarySHA256 {
+				return state, nil
+			}
 		}
 		op = "restart"
 	}

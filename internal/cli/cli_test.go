@@ -51,7 +51,7 @@ func TestInvalidBatchDoesNotPartiallySave(t *testing.T) {
 	root := t.TempDir()
 	run(t, root, "", "api", "project", "create", "demo", "--directory", t.TempDir())
 	before, _ := os.ReadFile(filepath.Join(root, "projects", "demo.yaml"))
-	code, r := run(t, root, "", "forward", "add", "local/demo", "-L", "8000", "-R", "0")
+	code, r := run(t, root, "", "forward", "local", "-L", "8000", "-R", "0")
 	if code != 2 || r.OK {
 		t.Fatalf("%d %+v", code, r)
 	}

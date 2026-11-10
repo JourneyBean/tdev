@@ -12,7 +12,7 @@
 
 已成功建立过的 R 映射在断线重连时，旧远端 SSH 连接可能仍占用监听端口。此时 remote port forwarding failed 按原转发重连预算继续等待；首次创建的端口冲突仍立即失败。恢复过程通过新连接重新绑定，保留其他使用者的监听。
 
-Last verified: 2026-11-10。版本：0.5.0。历史集成验收使用开发版版本号，见验收记录。
+Last verified: 2026-11-10。版本：0.6.0。历史集成验收使用开发版版本号，见验收记录。
 
 v0.5.0 汇总本地连接监督、open 功能选择、tmux 标题提醒、升级连接恢复与 ps 快照。源码默认值与 Makefile 统一为 0.5.0，机器协议与配置 schema 保持为 1，新增 ps-v1 能力，沿用现有安装签名公钥。GitHub/GitLab 的完整竞态测试超时统一为 300 秒，覆盖新增的真实签名升级与双向映射恢复用例。
 
@@ -23,6 +23,8 @@ v0.5.0 汇总本地连接监督、open 功能选择、tmux 标题提醒、升级
 daemon 的 inspect 快照关联控制 master、转发组的当前 socket、挂载记录与操作分配。控制连接获取锁被占用时报告 connecting，避免等待慢网络；资源锁仅用于复制状态，本地 OpenSSH 探测在锁外完成。`ssh -O check` 提供 master PID 与存活信息，表示本地 master 正在运行，远端故障仍可能处于 keepalive 检测窗口。`ssh -O channels` 解析实际通道的 ID、类型、状态及缓冲字节，排除本地 mux 控制通道并丢弃原始描述，避免采集应用命令。未知输出或旧 OpenSSH 明确标记统计不可用。
 
 API、终端附着和安装引导分别登记用途、项目名、客户端 PID 与开始时间；分配只保存在内存，通过已确认的 Unix HTTP 存续请求维持，正常结束、取消或客户端退出时释放。分配 ID 独立于 SSH wire channel ID，实际通道不支持时仍可展示 tdev 使用者。登记连接失败沿用可重试的传输错误分类，兼容旧 daemon 的未知操作响应。转发与 SSHFS 的 owners/durable 表示资源使用权；本机转发没有 SSH 通道，SSHFS 仅展示已登记的 helper PID，实际独立传输状态与通道未知。独立 scp 及其他程序的 SSH 连接保持各自生命周期，快照只汇总 tdev daemon 管理的资源。
+
+通道类型兼容 OpenSSH 的 `session:command`、`session:shell` 和 `session:subsystem:<name>` 扩展形式，统一保存基础类型 `session`。扩展后缀可能包含自定义子系统参数，解析时直接丢弃。旧解析器拒绝冒号，导致活跃会话使整组通道显示 `unrecognized`；空闲 master 的空报告仍可解析。
 
 ## GitHub CI 与发布
 
@@ -35,6 +37,12 @@ GitHub Actions 在 main 推送、PR 及版本标签事件中运行静态检查�
 发布公开后调用独立的只读验证 workflow，通过匿名版本下载地址校验全部附件及 Linux 在线安装。验证 workflow 支持手动输入已有标签，供网络问题恢复后单独重验。
 
 签名使用 Actions Secret 中的既有 PKCS8 Ed25519 密钥，先核对仓库公钥，再生成四平台签名包；临时密钥按步骤清理。发布前验证签名、摘要及安装脚本，固定上传 14 个文件，全部上传成功后公开草稿。测试任务只读，发布任务单独授予 contents: write；同一标签的执行串行化。现有 Release 保持原样，失败草稿由维护者检查后处理。配置步骤见 [GitHub Actions 发布](github-release.md)。
+
+## v0.6.0 版本
+
+默认构建与源码版本统一为 0.6.0。增加目标程序 post-install hooks、运行中 tmux 配置迁移和服务器临时转发。`forward` 的位置参数改为服务器，默认后台运行，`--foreground` 保持前台使用权；项目预设通过 `open --only forward` 启动，映射增删改统一使用 `edit`，原 `forward add/remove` 入口移除。该命令兼容性变化随 0.6 次版本发布。
+
+机器协议与项目配置 schema 保持为 1，新增 post-install-v1 能力；tmux 运行配置独立使用 schema 1。沿用现有安装签名公钥。旧客户端首次升级后需手动补跑新版 `post-install`，远端使用 `--remote <服务器>`。具体升级步骤见 [v0.6.0 发布说明](releases/v0.6.0.md)。
 
 ## v0.4.1 版本
 
@@ -116,9 +124,9 @@ setup 的初次项目发现与首个项目创建后的刷新仅读取项目定�
 
 `open` 完成会话、可选挂载和转发准备后，在进入 tmux 前向终端标准输出发送 OSC 2，将标题设为 `tdev: server/project`，本机服务器名为 local。标准输出重定向时跳过标题序列；标题使用已验证的服务器名和项目名。
 
-默认服务器字段已从运行配置和 setup 选择逻辑移除；已有文件的 default_server 仅在解码时丢弃，setup 重写配置时移除该字段，其他未知字段继续严格拒绝。服务器顺序统一按名称排列，本机项目优先规则保持一致。窗口 ID 的旧补全分支已删除。forward 只运行映射，保存由 add/remove 和 override 负责；旧保存参数与把数字参数解释为端口的简写已移除，数字项目名按普通项目解析。
+默认服务器字段已从运行配置和 setup 选择逻辑移除；已有文件的 default_server 仅在解码时丢弃，setup 重写配置时移除该字段，其他未知字段继续严格拒绝。服务器顺序统一按名称排列，本机项目优先规则保持一致。窗口 ID 的旧补全分支已删除。forward 按 server 运行显式临时映射，项目映射统一由 edit 修改，客户端偏好由 override 保存。旧保存参数及把数字参数解释为端口的简写已移除。
 
-用户命令直接操作项目：create/show/edit、ls、open/save/sh/stop、forward、push/pull、mount/unmount。原 project 与 window 用户分组移除；机器接口由 local 改为 api。`api project list/create/get/set` 统一读写完整定义，session 管理实际会话，transfer/binary/mount-probe 管理对应机器操作。
+项目命令包含 create/show/edit、open/save/sh、push/pull、mount/unmount；forward 面向服务器，ls 和 stop 同时处理项目、scratch 与临时转发。原 project 与 window 用户分组移除；机器接口由 local 改为 api。`api project list/create/get/set` 统一读写完整定义，session 管理实际会话，transfer/binary/mount-probe 管理对应机器操作。
 
 local 是保留的内置服务器名，无需连接配置。完整项目标识为 server/project；裸名称先检查本机，再按远端名称排序搜索。临时索引命中后，实际操作读取目标机器的最新定义；命中离线目标保留原目标并报告失败。缓存未命中时逐台读取指定项目定义，PROJECT_NOT_FOUND 继续查找，其他错误保留；解析目标独立于 tmux 状态，支持从旧版远端拉取更新。create 的裸名称默认本机，空参数向导提供本机和远端选择。
 
@@ -136,7 +144,7 @@ create、open 缺失项目和 edit 使用同一份草稿向导。目录、窗口
 
 验证连接后探测已有远端程序，读取远端项目定义，按需提示安装。新地址使用私有 SSH profile，既有服务器保留原配置目录与偏好。提交本机连接前重新读取并检查同一服务器配置，冲突时停止，其他服务器的并发改动保留。
 
-`client.yaml` 继续保存连接及重连偏好；本机监听端口差异和附加 -L 单独保存在 `overrides.yaml`。`ls` 和 `open` 每次发现远端定义后合并，覆盖按项目 UUID 和稳定 forward ID 绑定；过期身份、已删除映射、重复监听和非法端口在执行前报错。`get` 保持读取远端原始定义，避免 `save` 把客户端差异写回远端。共享定义通过 `forward add/remove` 或 edit 修改。
+`client.yaml` 继续保存连接及重连偏好；本机监听端口差异和附加 -L 单独保存在 `overrides.yaml`。`ls` 和 `open` 每次发现远端定义后合并，覆盖按项目 UUID 和稳定 forward ID 绑定；过期身份、已删除映射、重复监听和非法端口在执行前报错。`get` 保持读取远端原始定义，避免 `save` 把客户端差异写回远端。共享定义通过 edit 修改。
 
 ## v0.0.2 安装与分发
 
@@ -168,7 +176,7 @@ config，避免把用户 config 中保存的其他转发也提交给本次 maste
 保留 SSH alias 的连接、认证和 ProxyJump 等能力；不接管用户已有 ControlMaster。
 
 映射分别监督并使用 forward 重连策略。冲突不会杀死其他监听，保存定义与实际连接状态
-分别报告。前台 forward 退出时取消自己的映射并关闭连接，随后删除控制 socket。open 的映射由 daemon 按使用权管理，后台状态通过 daemon status 查询。
+分别报告。前台 forward 由 daemon 按使用权管理，退出时取消自己的映射并关闭连接，随后删除控制 socket。open 的映射由 daemon 按使用权管理，后台状态通过 daemon status 查询。
 ready 表示 SSH 监听已建立；应用健康由应用自身检查。
 
 ## 终端重连
@@ -245,7 +253,7 @@ setup 自动读取已有连接，也支持使用现有 identity/agent 创建私�
 
 项目与 scratch 创建时设置运行中的 tmux 标题及 hook，已有会话在下次附着前补齐。本机和远端使用同一逻辑，状态与 hook 随 tmux 运行时保存。标题为 `session:window`，任一窗口有原生 bell、activity、silence 提醒或失焦 bell 标记时加 `[!]`。开启 `monitor-activity` 时普通输出也属于提醒。agent 完成信号沿用应用发出的 bell。
 
-`client-focus-out` 记录 session 失焦；此时当前窗口的 `alert-bell` 设置窗口选项 `@tdev_unfocused_bell`。重新聚焦清除当前窗口的补充标记；切换窗口清除进入窗口的补充标记。重新附着保留补充标记，附着或切换 session 后默认聚焦，等待终端后续焦点上报。其他窗口标记继续汇总，原生提醒由 tmux 清除。应用仅使用 tmux 命令与格式，无需 agent hook、后台进程或轮询。session 的配置锁与版本标记保证重复附着沿用同一组 hook。
+`client-focus-out` 记录 session 失焦；此时当前窗口的 `alert-bell` 设置窗口选项 `@tdev_unfocused_bell`。重新聚焦清除当前窗口的补充标记；切换窗口清除进入窗口的补充标记。重新附着保留补充标记，附着或切换 session 后默认聚焦，等待终端后续焦点上报。其他窗口标记继续汇总，原生提醒由 tmux 清除。应用仅使用 tmux 命令与格式，无需 agent hook、后台进程或轮询。运行时配置 schema 与 hook 索引保证重复附着沿用同一组 hook；安装后的迁移策略见下文。
 
 标题、bell-action 和 hook 作用于托管 session，monitor-bell 作用于其窗口，包括后续新建窗口。首次设置 session hook 时复制当时继承的同名全局动作，再追加 tdev 动作；已有本地动作保留。用户配置文件及全局标题、hook 保持原状。`focus-events` 是 server 级选项，需在首次附着前运行时开启，并保持到该 server 结束；同 server 的其他客户端也受此焦点上报设置影响。已附着的客户端需重新附着以请求终端焦点上报。终端缺少焦点上报时仍使用原生窗口提醒。早期隔离调研协议与结果保存在仓库本地 `.summary-web/`。
 
@@ -261,3 +269,25 @@ go.mod/go.sum。运行产物无需 Go。
 
 配置回退使用对应 `.yaml.rev-N.bak`，读取当前 revision 后显式导入。
 二进制回退使用 receipt 中带哈希的备份及 upgrade --rollback，外部修改会被拒绝覆盖。
+
+## 安装后处理与 tmux 配置迁移
+
+本机和远端的 install、upgrade、回滚以及签名安装脚本，在二进制提交并校验后执行目标程序的 `api binary post-install`。安装锁覆盖目标程序调用，避免另一安装替换正在处理的版本；相同内容重装也执行 hooks。安装记录或备份清理失败时，已校验目标的 hooks 仍执行，错误汇总为 PARTIAL_SUCCESS。固定注册顺序为 tmux-runtime、daemon-refresh，前一项失败后继续执行后一项。安装响应保留原安装字段并新增 post_install；失败时 error.details 保存安装结果和逐项报告，二进制保留供重试。
+
+`tdev post-install` 补跑当前版本的处理，`--remote dev` 在登记的远端执行，机器入口为 `tdev --json api binary post-install`，能力名为 post-install-v1。每项处理都有超时并服从调用方的总超时和取消。已发布旧客户端首次升级仍执行旧流程，完成后运行目标路径的 post-install；回滚到缺少该入口的旧版本时报告部分成功，保留已恢复的二进制与配置。
+
+daemon 在启动时记录程序摘要。refresh 在生命周期锁内比较目标摘要：一致时保持现有进程，变化或旧 daemon 未提供摘要时用目标程序重启；已停止的 daemon 保持停止。其他配置根的 daemon 由各自 post-install 管理。
+
+tmux session 的 `@tdev_runtime_config_version` 记录配置 schema，当前为 1。缺失或 0 迁移到当前版本，相等时跳过，更高值或未知旧提醒版本返回兼容错误并保留配置。`@tdev_alerts_version=1` 保留为旧客户端兼容标记；项目元数据 schema 与 session generation 保持原语义。版本最后提交，失败后保留原值供幂等重试。创建和附着共用迁移器，批量处理额外核对枚举时的 generation。
+
+session 的 `@tdev_config_owner` 保存规范化配置根的摘要；项目按当前定义 UUID 匹配，普通、其他配置根及未完成的 session 保留。新 scratch 写入归属，旧 scratch 在显式附着时认领，批量认领需 `post-install --adopt-legacy-scratch`。迁移锁存放在共享用户状态根，以 tmux socket 和 session 标识区分，跨配置根串行化同一会话的认领。
+
+迁移精确识别旧版 tdev hook，去除重复动作，保留用户动作及继承的全局动作。在 9000–9999 中选择所有相关 hook 均空闲的索引，并记录 `@tdev_runtime_hook_index`；重试复用该索引，冲突报告错误。原生提醒、失焦 bell 标记、已有焦点状态、窗口、pane 和 session generation 保留。首次开启 focus-events 时，为已附着的迁移会话返回 reattach_required；终端焦点上报需重新附着，标题配置可直接更新。
+
+## 服务器临时转发
+
+`forward [server]` 独立于项目和 tmux，要求显式提供 -L/-R。默认在监听就绪后返回；生成的 forward-… 组名及 server 随规则登记到当前客户端 daemon。后台组在 daemon restart 后恢复，stop server/name 删除整组及恢复登记。临时组与项目映射使用独立的所有权标识，端口冲突按正常监听错误处理。启动失败或取消时回收整组；恢复已有后台组时保留重连预算和恢复登记。
+
+`--foreground` 使用存续连接绑定使用权，命令退出或客户端异常结束时释放监听；普通非交互命令的 timeout 不限制前台运行时长。daemon 终止时前台命令结束。ls 增加 forward 类型并展示临时组的监听状态，数据来自当前客户端的实时 daemon 状态，省去发现缓存；ls --type forward 省去远端项目与 tmux 查询。
+
+项目共享映射统一由 edit 向导或 edit --stdin 修改。删除映射时清理当前客户端对应的 override；forward add/remove 入口移除。forward 位置参数补全使用服务器名称，stop 补全包含临时转发名称。已有 daemon 缺少临时组能力时，forward 提示执行 daemon restart。

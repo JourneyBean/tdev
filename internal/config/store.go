@@ -15,6 +15,15 @@ import (
 
 type Store struct{ Root string }
 
+// StateRoot is shared by processes using different configuration roots.
+func StateRoot() string {
+	if root := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(root) {
+		return filepath.Join(root, "tdev")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state", "tdev")
+}
+
 func DefaultRoot() string {
 	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
 		return filepath.Join(d, "tdev")

@@ -23,6 +23,8 @@ import (
 const Protocol = 1
 
 type Request struct {
+	Name       string `json:",omitempty"`
+	Server     string `json:",omitempty"`
 	Op         string
 	Alias      string
 	SSH        sshx.Options
@@ -37,20 +39,24 @@ type Request struct {
 }
 
 type State struct {
-	Protocol    int             `json:"protocol"`
-	PID         int             `json:"pid"`
-	Connections int             `json:"connections"`
-	Forwards    []ForwardState  `json:"forwards"`
-	Socket      string          `json:"socket,omitempty"`
-	Result      json.RawMessage `json:"result,omitempty"`
-	Warnings    []string        `json:"warnings,omitempty"`
-	Inspection  *Inspection     `json:"inspection,omitempty"`
+	TemporaryForwards bool            `json:"temporary_forwards,omitempty"`
+	BinarySHA256      string          `json:"binary_sha256,omitempty"`
+	Protocol          int             `json:"protocol"`
+	PID               int             `json:"pid"`
+	Connections       int             `json:"connections"`
+	Forwards          []ForwardState  `json:"forwards"`
+	Socket            string          `json:"socket,omitempty"`
+	Result            json.RawMessage `json:"result,omitempty"`
+	Warnings          []string        `json:"warnings,omitempty"`
+	Inspection        *Inspection     `json:"inspection,omitempty"`
 }
 
 type ForwardState struct {
-	Spec  string `json:"spec"`
-	State string `json:"state"`
-	Error string `json:"error,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Server string `json:"server,omitempty"`
+	Spec   string `json:"spec"`
+	State  string `json:"state"`
+	Error  string `json:"error,omitempty"`
 }
 
 type reply struct {

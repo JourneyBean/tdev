@@ -16,10 +16,10 @@ import (
 
 func (a *app) workspaceCommands() {
 	a.scratchCommand()
-	ls := a.command(a.root, "ls", "List projects and scratch sessions across configured servers", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
+	ls := a.command(a.root, "ls", "List projects, scratch sessions and temporary forwards", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
 		return a.listProjects(ctx, c)
 	})
-	ls.Flags().String("type", "", "filter by project or scratch")
+	ls.Flags().String("type", "", "filter by project, scratch or forward")
 	ls.Flags().Bool("all", false, "query every configured server (the default)")
 	ls.Flags().String("server", "", "only list this saved server")
 	for _, op := range []string{"save", "stop", "sh"} {
@@ -28,6 +28,11 @@ func (a *app) workspaceCommands() {
 			arg := ""
 			if len(args) > 0 {
 				arg = args[0]
+			}
+			if op == "stop" && arg != "" {
+				if handled, result, err := a.stopTemporaryForward(ctx, arg); handled {
+					return result, err
+				}
 			}
 			t, err := a.resolve(ctx, arg, true)
 			if err != nil {
@@ -89,6 +94,10 @@ func (a *app) workspaceCommands() {
 			}
 			return a.call(ctx, t, nil, argv...)
 		})
+		if op == "stop" {
+			c.Use = "stop [name]"
+			c.Short = "Stop a project, scratch session or temporary forward"
+		}
 		if op == "sh" {
 			c.Flags().Bool("save", false, "persist the new shell definition")
 			c.Flags().String("name", "shell", "name of the new tmux window")

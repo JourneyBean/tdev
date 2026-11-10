@@ -14,7 +14,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"tdev/internal/config"
-	"tdev/internal/daemon"
 	"tdev/internal/protocol"
 	"tdev/internal/sshx"
 	"tdev/internal/tmux"
@@ -65,6 +64,7 @@ func (a *app) bundle(ctx context.Context, c *cobra.Command, goos, arch string, r
 }
 func (a *app) apiUpdate(local *cobra.Command) {
 	g := group(local, "binary", "Inspect/install/rollback a verified local binary")
+	a.postInstallCommand(g)
 	a.command(g, "platform", "Report runtime platform without requiring tmux", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
 		return map[string]string{"os": runtime.GOOS, "arch": runtime.GOARCH}, nil
 	})
@@ -88,19 +88,20 @@ func (a *app) apiUpdate(local *cobra.Command) {
 			b.SourceURL = sourceURL
 		}
 		destination, _ := c.Flags().GetString("destination")
-		return update.Install(ctx, a.store, b, destination)
+		return a.installBinary(ctx, b, destination)
 	})
 	releaseFlags(install)
 	install.Flags().String("destination", "", "absolute or home-relative binary destination")
 	install.Flags().String("source-url", "", "verified source URL to remember for future upgrades")
 	rollback := a.command(g, "rollback", "Restore the previous identity-checked binary backup", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
 		d, _ := c.Flags().GetString("destination")
-		return update.Rollback(ctx, a.store, d)
+		return a.rollbackBinary(ctx, d)
 	})
 	rollback.Flags().String("destination", "", "managed destination")
 	a.apiMountProbe(local)
 }
 func (a *app) updateCommands() {
+	a.postInstallCommand(a.root)
 	for _, op := range []string{"install", "upgrade"} {
 		op := op
 		c := &cobra.Command{Use: op, Short: op + " a signed local or remote binary without restarting sessions", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
@@ -155,23 +156,12 @@ func (a *app) updateCommands() {
 			if err != nil {
 				return err
 			}
-			// Capture the running path before replacing its executable.
-			refreshDaemon := false
 			if op == "upgrade" {
 				a.upgradeNotice("")
-				executable, executableErr := os.Executable()
-				if executableErr != nil {
-					return executableErr
-				}
-				current, currentErr := update.Destination(executable)
-				if currentErr != nil {
-					return currentErr
-				}
-				refreshDaemon = current == destination
 			}
 			if rollback {
-				result, err := update.Rollback(c.Context(), a.store, destination)
-				return a.finishUpgrade(c.Context(), destination, refreshDaemon, result, err)
+				result, err := a.rollbackBinary(c.Context(), destination)
+				return a.result(result, err)
 			}
 			if old, err := update.ReadReceipt(destination); err == nil {
 				receipt = &old
@@ -188,13 +178,7 @@ func (a *app) updateCommands() {
 					return err
 				}
 			}
-			beforeInstall, _ := os.Stat(destination)
-			result, err := update.Install(c.Context(), a.store, b, destination)
-			if err == nil && refreshDaemon && beforeInstall != nil {
-				if afterInstall, statErr := os.Stat(destination); statErr == nil && os.SameFile(beforeInstall, afterInstall) {
-					refreshDaemon = false
-				}
-			}
+			result, err := a.installBinary(c.Context(), b, destination)
 			if err == nil && op == "install" {
 				completion, completionErr := a.configureCompletionAfterInstall(c.Context(), completionMode, destination)
 				if completionErr != nil {
@@ -204,7 +188,7 @@ func (a *app) updateCommands() {
 					return a.result(map[string]any{"installation": result, "completion": completion}, nil)
 				}
 			}
-			return a.finishUpgrade(c.Context(), destination, refreshDaemon, result, err)
+			return a.result(result, err)
 		}}
 		a.root.AddCommand(c)
 		releaseFlags(c)
@@ -219,31 +203,14 @@ func (a *app) updateCommands() {
 
 func (a *app) upgradeNotice(remote string) {
 	if remote != "" {
-		fmt.Fprintln(a.errOut, "升级期间端口映射可能短暂中断。远端升级保留现有 SSH 连接和 tmux 会话；现有附着进程继续运行，后续请求和断线重连使用升级后的远端程序。")
+		fmt.Fprintln(a.errOut, "升级期间端口映射可能短暂中断。远端目标程序执行 post-install hooks 并保留 tmux 会话；现有附着进程继续运行，后续请求和断线重连使用升级后的远端程序。")
 		fmt.Fprintf(a.errOut, "连接中断时，当前终端按重连策略恢复原会话；自动重连失败后可运行 tdev open %s/<项目名>。协议不兼容时请先升级本地客户端。\n", remote)
 		return
 	}
-	fmt.Fprintln(a.errOut, "升级期间端口映射可能短暂中断。本地原位更新二进制后会用目标版本重启当前配置的运行中 daemon；活跃终端按重连策略恢复原 tmux 会话，后台映射重新建立。相同内容的重复升级及已停止的 daemon 保持原状。")
+	fmt.Fprintln(a.errOut, "升级期间端口映射可能短暂中断。安装后的目标程序执行 post-install hooks，迁移当前配置的托管 tmux 会话，并在程序内容变化时刷新运行中的 daemon；活跃终端按重连策略恢复，后台映射重新建立。已停止的 daemon 保持停止。")
 	fmt.Fprintln(a.errOut, "现有客户端进程继续运行原版本；自动重连失败后请重新运行 tdev open <服务器>/<项目名>。")
 }
 
-// Refresh only a running supervisor after a successful in-place upgrade. The
-// lifecycle operation uses the installed executable, not this process's old image.
-func (a *app) finishUpgrade(ctx context.Context, destination string, refresh bool, result any, installErr error) error {
-	if installErr != nil || !refresh {
-		return a.result(result, installErr)
-	}
-	ctx, cancel := context.WithTimeout(ctx, a.timeout)
-	defer cancel()
-	client, err := daemon.New(a.store.Root)
-	if err == nil {
-		_, err = client.Manage(ctx, "refresh", destination, a.store.Root)
-	}
-	if err != nil {
-		return a.result(nil, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "binary updated; daemon restart failed; run tdev daemon restart, then reopen affected projects: " + err.Error(), Details: result})
-	}
-	return a.result(result, nil)
-}
 func (a *app) shell(ctx context.Context, t target, command string) (data []byte, resultErr error) {
 	started := time.Now()
 	var exitCode *int
