@@ -4,10 +4,10 @@
 选择已有连接或填写服务器地址，读取目标设备的项目配置，随后打开项目继续开发。
 复用系统 OpenSSH 和 tmux，远端无需数据库、HTTP API 或常驻 tdev 服务。
 
-当前源码版本为 `0.6.0`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
+当前源码版本为 `0.7.0`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
 挂载、本地连接 daemon、功能选择、签名安装升级和回滚。设计基线见[产品与技术设计](docs/design.md)，实现取舍见
 [开发记录](docs/development.md)，实际通过与尚未实测的场景见[第一版验收记录](docs/acceptance.md)。
-版本变更见[发布说明](docs/releases/v0.6.0.md)。二进制 Release 位于
+版本变更见[发布说明](docs/releases/v0.7.0.md)。二进制 Release 位于
 [GitHub](https://github.com/JourneyBean/tdev/releases)。
 
 ## 安装
@@ -104,7 +104,7 @@ tdev edit dev/demo --directory /home/developer/projects/new-demo
 tdev override dev/demo --forward FORWARD_ID --local-port 18000
 ```
 
-create 和 edit 复用逐项向导，edit 预填已有值：项目目录、启动窗口、端口映射及保存确认。目录应已存在，支持绝对路径、`~/路径` 与 Tab 补全。初始窗口默认为 `main`。输入支持方向键、Home/End 和删除，兼容 UTF-8、空格与引号。
+create 和 edit 复用逐项向导，edit 预填已有值：项目目录、启动窗口、端口映射及保存确认。目录支持绝对路径、`~/路径` 与 Tab 补全；目录不存在时询问是否创建，默认不创建。确认后在项目所在机器创建目录及缺失的父目录，随后取消向导仍保留目录。非交互 `--directory` 要求目录已存在。初始窗口默认为 `main`。输入支持方向键、Home/End 和删除，兼容 UTF-8、空格与引号。
 
 添加映射时选择 L/R，直接输入 `localhost:8000`、`service.internal:3000` 或 `[::1]:8000`。监听端口默认取服务端口。远端 L 映射的默认监听端口保存在项目定义，当前客户端的端口调整单独保存为 override。可连续添加或跳过。项目转发的增、删、改统一使用 `edit`；保存后通过 `open` 或 `open --only forward` 建立监听。
 

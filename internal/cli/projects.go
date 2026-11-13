@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -196,7 +197,10 @@ func (a *app) chooseServer(ctx context.Context, p preferences, label string) (st
 		fmt.Fprintln(a.errOut, "请选择列表中的服务器。")
 	}
 }
-func (a *app) remoteDirectory(ctx context.Context, t target, dir string) (string, error) {
+
+var errProjectDirectoryMissing = config.Invalid("project directory does not exist")
+
+func quoteProjectDirectory(dir string) (string, error) {
 	if dir == "" || !config.SafeText(dir) {
 		return "", config.Invalid("provide an existing project directory")
 	}
@@ -208,15 +212,39 @@ func (a *app) remoteDirectory(ctx context.Context, t target, dir string) (string
 	} else if !strings.HasPrefix(dir, "/") {
 		return "", config.Invalid("use an absolute path or ~/path")
 	}
-	data, err := a.shell(ctx, t, "cd -- "+quoted+" && pwd -P")
+	return quoted, nil
+}
+
+func (a *app) remoteDirectory(ctx context.Context, t target, dir string) (string, error) {
+	quoted, err := quoteProjectDirectory(dir)
+	if err != nil {
+		return "", err
+	}
+	// Report missing paths in stdout only after a successful shell invocation,
+	// so SSH failures cannot be mistaken for a request to create a directory.
+	data, err := a.shell(ctx, t, "if [ ! -e "+quoted+" ] && [ ! -L "+quoted+" ]; then printf 'missing\\n'; else cd -- "+quoted+" && pwd -P; fi")
 	if err != nil {
 		return "", fmt.Errorf("project directory unavailable: %w", err)
+	}
+	if string(data) == "missing\n" {
+		return "", errProjectDirectoryMissing
 	}
 	path := strings.TrimSuffix(string(data), "\n")
 	if !strings.HasPrefix(path, "/") || !config.SafeText(path) {
 		return "", config.Invalid("invalid project directory response")
 	}
 	return path, nil
+}
+
+func (a *app) createProjectDirectory(ctx context.Context, t target, dir string) (string, error) {
+	quoted, err := quoteProjectDirectory(dir)
+	if err != nil {
+		return "", err
+	}
+	if _, err = a.shell(ctx, t, "mkdir -p -- "+quoted); err != nil {
+		return "", fmt.Errorf("create project directory: %w", err)
+	}
+	return a.remoteDirectory(ctx, t, dir)
 }
 func (a *app) createRemoteProject(ctx context.Context, t target, dir string, interactive bool) (config.Project, error) {
 	p := config.Project{SchemaVersion: 1, Revision: 1, ID: config.NewID(), Name: t.Project, Directory: dir, Windows: []config.Window{{ID: "main", Name: "main", Directory: "."}}, Forwards: []config.Forward{}}
@@ -267,8 +295,9 @@ func (a *app) createRemoteProject(ctx context.Context, t target, dir string, int
 	return p, nil
 }
 
-// The same draft editor is used for create, open-on-missing and edit. No write
-// occurs until all fields and the final confirmation have been accepted.
+// The same draft editor is used for create, open-on-missing and edit. Project
+// configuration is saved after final confirmation; directory creation has its
+// own confirmation and takes effect immediately.
 func (a *app) projectWizard(ctx context.Context, t target, p config.Project) (config.Project, projectOverride, error) {
 	override := cloneOverride(t.Server.Projects[p.Name])
 	if override.ProjectID != "" && override.ProjectID != p.ID {
@@ -282,6 +311,17 @@ func (a *app) projectWizard(ctx context.Context, t target, p config.Project) (co
 			return p, override, err
 		}
 		p.Directory, err = a.remoteDirectory(ctx, t, dir)
+		if errors.Is(err, errProjectDirectoryMissing) {
+			fmt.Fprintf(a.errOut, "目录：%s\n创建后取消向导仍保留目录。\n", dir)
+			create, promptErr := a.wizardYes(ctx, "目录不存在，是否创建目录？", false)
+			if promptErr != nil {
+				return p, override, promptErr
+			}
+			if !create {
+				continue
+			}
+			p.Directory, err = a.createProjectDirectory(ctx, t, dir)
+		}
 		if err == nil {
 			break
 		}

@@ -286,6 +286,7 @@ func TestUpgradeWithActiveSSHAndForwards(t *testing.T) {
 		t.Logf("remote rollback=%v", rollback)
 		{
 			oldImage, pid := attachedImage(), daemonPID()
+			titleOffset := len(terminal.output.String())
 			args := []string{"--remote", "fixture", "-y", "--release-dir", v2}
 			version := "0.4.2"
 			if rollback {
@@ -312,8 +313,8 @@ func TestUpgradeWithActiveSSHAndForwards(t *testing.T) {
 			waitFor("forward after remote replacement", forwardWorks)
 			assertSession()
 			waitFor("remote hook updates live OSC title", func() bool {
-				parts := strings.Split(terminal.output.String(), "\x1b]0;")
-				return len(parts) > 1 && strings.HasPrefix(parts[len(parts)-1], original.SessionName+":main\a")
+				parts := strings.Split(terminal.output.String()[titleOffset:], "\x1b]2;")
+				return len(parts) > 1 && strings.HasPrefix(parts[len(parts)-1], "tdev: fixture/demo\a")
 			})
 			offset := len(terminal.output.String())
 			s.Offline(true)

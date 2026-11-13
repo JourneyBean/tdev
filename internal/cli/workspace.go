@@ -200,11 +200,6 @@ func (a *app) workspaceCommands() {
 			if doMount || selected.sshfs {
 				return config.Invalid("sshfs requires a project")
 			}
-			if out, ok := a.out.(*os.File); ok && terminalAvailable(out) {
-				if _, err = fmt.Fprintf(out, "\x1b]2;tdev: %s/%s\x07", t.Name, t.Project); err != nil {
-					return err
-				}
-			}
 			return a.attach(c.Context(), t, s, "", budget)
 		}
 		if s.Warning != "" {
@@ -235,11 +230,6 @@ func (a *app) workspaceCommands() {
 					return err
 				}
 				defer closeForwards()
-			}
-		}
-		if out, ok := a.out.(*os.File); ok && terminalAvailable(out) {
-			if _, err = fmt.Fprintf(out, "\x1b]2;tdev: %s/%s\x07", t.Name, t.Project); err != nil {
-				return err
 			}
 		}
 		return a.attach(c.Context(), t, s, "", budget)

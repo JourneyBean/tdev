@@ -84,12 +84,11 @@ func TestAlertTitlesAndFocus(t *testing.T) {
 	})
 	title := func(window string, pending bool) {
 		t.Helper()
-		name := run("display-message", "-p", "-t", window, "#W")
-		want := s.SessionName + ":" + name
-		if pending {
-			want = "[!] " + want
-		}
-		waitAlert(t, func() bool { return output.lastTitle() == want })
+		waitAlert(t, func() bool {
+			title := output.lastTitle()
+			marks, ok := strings.CutPrefix(title, "tdev-alert-v1:"+p.Name+":")
+			return ok && strings.Trim(marks, "1") == "" && (len(marks) > 0) == pending
+		})
 	}
 	focus := func(in bool) {
 		t.Helper()
@@ -120,6 +119,7 @@ func TestAlertTitlesAndFocus(t *testing.T) {
 	focus(false)
 	bell(a)
 	flag(a, "1")
+	waitAlert(t, func() bool { return output.lastTitle() == "tdev-alert-v1:"+p.Name+":11" })
 	title(a, true)
 	focus(true)
 	flag(a, "0")

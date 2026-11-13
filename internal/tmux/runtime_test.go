@@ -29,7 +29,7 @@ func TestRuntimeMigrationPreservesStateAndRetries(t *testing.T) {
 	pane := run("display-message", "-p", "-t", s.SessionID, "#{pane_id}:#{pane_pid}")
 	// Reconstruct legacy v1, including duplicate actions left by an interrupted
 	// initializer. A reserved-index collision must preserve user actions.
-	run("set-option", "-u", "-t", s.SessionID, "@tdev_runtime_config_version")
+	run("set-option", "-t", s.SessionID, "@tdev_runtime_config_version", "1")
 	for _, hook := range alertHooks(s.SessionID) {
 		run("set-hook", "-u", "-t", s.SessionID, hook[0]+"[9000]")
 		run("set-hook", "-t", s.SessionID, hook[0]+"[0]", hook[1])
@@ -126,13 +126,13 @@ func TestRuntimeScopeAndFutureVersion(t *testing.T) {
 	if run("show-options", "-qv", "-t", other, "@tdev_runtime_config_version") != "" {
 		t.Fatal("unmanaged session changed")
 	}
-	run("set-option", "-t", s.SessionID, "@tdev_runtime_config_version", "2")
+	run("set-option", "-t", s.SessionID, "@tdev_runtime_config_version", "3")
 	run("set-option", "-t", s.SessionID, "set-titles-string", "future-title")
 	rows, err = m.ReconcileRuntime(ctx, false)
 	if err == nil || protocol.Normalize(err).Code != "PARTIAL_SUCCESS" {
 		t.Fatalf("future version %+v %v", rows, err)
 	}
-	if run("show-options", "-v", "-t", s.SessionID, "set-titles-string") != "future-title" || run("show-options", "-v", "-t", s.SessionID, "@tdev_runtime_config_version") != "2" {
+	if run("show-options", "-v", "-t", s.SessionID, "set-titles-string") != "future-title" || run("show-options", "-v", "-t", s.SessionID, "@tdev_runtime_config_version") != "3" {
 		t.Fatal("future configuration overwritten")
 	}
 	// Attach's direct initializer also honors ownership and future versions.

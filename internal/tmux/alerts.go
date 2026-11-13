@@ -7,7 +7,7 @@ import (
 
 // Native alerts remain owned by tmux. Only bells in an unfocused current
 // window need an additional flag, since tmux immediately acknowledges them.
-const alertTitle = "#{?#{||:#{session_alerts},#{W:#{?@tdev_unfocused_bell,1,}}},[!] ,}#S:#W"
+const alertTitle = "tdev-alert-v1:#{?@tdev_scratch_name,#{@tdev_scratch_name},#{@tdev_project_name}}:#{W:#{?#{||:#{window_bell_flag},#{||:#{window_activity_flag},#{||:#{window_silence_flag},#{@tdev_unfocused_bell}}}},1,}}"
 
 func (m Manager) configureAlerts(ctx context.Context, session string) error {
 	_, err := m.configureRuntime(ctx, session)

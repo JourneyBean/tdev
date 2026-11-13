@@ -13,7 +13,7 @@ import (
 	"tdev/internal/transfer"
 )
 
-const RuntimeConfigVersion = 1
+const RuntimeConfigVersion = 2
 
 type RuntimeSession struct {
 	ID       string          `json:"session_id"`
@@ -233,7 +233,9 @@ func (m Manager) configureRuntime(ctx context.Context, session string, generatio
 	if err != nil {
 		return row, err
 	}
-	row.Reattach = focus != "on" && clients != ""
+	// Existing client processes need the new output filter after this template
+	// migration, even when their terminal already reports focus events.
+	row.Reattach = clients != "" && (focus != "on" || row.Version < 2)
 	// Save ownership before changing hooks; retries use the same reserved index.
 	for _, opt := range [][2]string{{"@tdev_config_owner", owner}, {"@tdev_runtime_hook_index", index}} {
 		if _, err = m.run(ctx, "set-option", "-t", session, opt[0], opt[1]); err != nil {

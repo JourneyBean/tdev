@@ -38,8 +38,15 @@ func TestClientProjectManagement(t *testing.T) {
 	wizard.waitText(t, "项目名称（")
 	wizard.write(t, "my-awsome-project\r")
 	wizard.waitText(t, "项目目录（")
-	wizard.write(t, "/nonexistent-tdev-test-project\r")
-	wizard.waitText(t, "project directory unavailable")
+	declinedDirectory := filepath.Join(t.TempDir(), "declined")
+	wizard.write(t, declinedDirectory+"\r")
+	wizard.waitText(t, "目录不存在，是否创建目录")
+	directoryPrompts := strings.Count(wizard.output.String(), "项目目录（")
+	wizard.write(t, "\r") // Default is no.
+	wizard.waitTextAfter(t, "项目目录（", directoryPrompts)
+	if _, err := os.Stat(declinedDirectory); !os.IsNotExist(err) {
+		t.Fatal("declined directory was created", err)
+	}
 	wizard.write(t, directory+"\r")
 	finishProjectWizard(t, wizard)
 	wizard.waitText(t, "已创建项目 fixture/my-awsome-project")
@@ -59,6 +66,11 @@ func TestClientProjectManagement(t *testing.T) {
 	run("", 0, "ls", "--server", "fixture")
 	run("", 2, "ls", "--server", "missing")
 	run("", 2, "create", "noninteractive")
+	missingDirectory := filepath.Join(t.TempDir(), "missing")
+	run("", 2, "create", "fixture/noninteractive", "--directory", missingDirectory)
+	if _, err := os.Stat(missingDirectory); !os.IsNotExist(err) {
+		t.Fatal("noninteractive create made a directory", err)
+	}
 	run("", 0, "create", "fixture/second", "--directory", directory)
 	run("", 4, "create", "fixture/second", "--directory", directory)
 	p, _ = store.Get("second")
@@ -98,10 +110,35 @@ func TestClientProjectManagement(t *testing.T) {
 	create.waitText(t, "项目名称（")
 	create.write(t, "third\r")
 	create.waitText(t, "项目目录（")
-	create.write(t, directory+"\r")
+	createdDirectory := filepath.Join(t.TempDir(), "中文 项目' $(false)", "nested")
+	create.write(t, createdDirectory+"\r")
+	create.waitText(t, "目录不存在，是否创建目录")
+	create.write(t, "y\r")
 	finishProjectWizard(t, create)
 	create.waitText(t, "已创建项目 fixture/third")
 	create.exit(t, 0)
+	created, err := store.Get("third")
+	if err != nil || created.Directory != createdDirectory {
+		t.Fatal("created directory not saved", created, err)
+	}
+	if info, err := os.Stat(createdDirectory); err != nil || !info.IsDir() {
+		t.Fatal("directory not created on server", err)
+	}
+	t.Run("cancel_directory_creation", func(t *testing.T) {
+		cancelDirectory := filepath.Join(t.TempDir(), "cancelled")
+		cancel := terminalCLI(t, binary, root, s.Config, "create", "fixture/cancel-directory")
+		cancel.waitText(t, "项目目录（")
+		cancel.write(t, cancelDirectory+"\r")
+		cancel.waitText(t, "目录不存在，是否创建目录")
+		cancel.write(t, "\x03")
+		cancel.exit(t, 130)
+		if _, err := os.Stat(cancelDirectory); !os.IsNotExist(err) {
+			t.Fatal("cancelled confirmation made a directory", err)
+		}
+		if _, err := store.Get("cancel-directory"); err == nil {
+			t.Fatal("cancelled confirmation saved a project")
+		}
+	})
 	t.Run("open_guides_missing_project", func(t *testing.T) {
 		declined := terminalCLI(t, binary, root, s.Config, "open", "declined")
 		declined.waitText(t, "现在配置并打开这个项目")

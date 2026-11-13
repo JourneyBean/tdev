@@ -13,6 +13,7 @@ import (
 
 	"tdev/internal/config"
 	"tdev/internal/protocol"
+	"tdev/internal/terminal"
 )
 
 type Attachment struct {
@@ -63,6 +64,16 @@ func (m Manager) Attachment(ctx context.Context, p config.Project, token string)
 	return a, nil
 }
 func (m Manager) Attach(ctx context.Context, p config.Project, session, generation, window, token string, in io.Reader, out, stderr io.Writer) error {
+	return m.attach(ctx, p, session, generation, window, token, in, out, stderr, false)
+}
+
+// AttachClient relays a local interactive attachment through a private PTY so
+// the caller can filter titles. API attachments retain the native TTY path.
+func (m Manager) AttachClient(ctx context.Context, p config.Project, session, generation, window, token string, in *os.File, out, stderr io.Writer) error {
+	return m.attach(ctx, p, session, generation, window, token, in, out, stderr, true)
+}
+
+func (m Manager) attach(ctx context.Context, p config.Project, session, generation, window, token string, in io.Reader, out, stderr io.Writer, relay bool) error {
 	s, err := m.attachmentSession(ctx, p)
 	if err != nil {
 		return err
@@ -95,16 +106,22 @@ func (m Manager) Attach(ctx context.Context, p config.Project, session, generati
 	cmd.Stdin = in
 	cmd.Stdout = out
 	cmd.Stderr = stderr
-	if err = cmd.Start(); err != nil {
+	wait := cmd.Wait
+	if relay {
+		wait, err = terminal.StartRelay(cmd, in.(*os.File), out)
+	} else {
+		err = cmd.Start()
+	}
+	if err != nil {
 		return err
 	}
 	a := Attachment{SessionID: s.SessionID, Generation: s.Generation, PID: cmd.Process.Pid}
 	b, _ := json.Marshal(a)
 	if err = config.AtomicWrite(path, b, 0600); err != nil {
 		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		_ = wait()
 		return fmt.Errorf("attach status registration failed: %w", err)
 	}
 	defer os.Remove(path)
-	return cmd.Wait()
+	return wait()
 }

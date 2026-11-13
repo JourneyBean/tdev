@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,12 +14,18 @@ import (
 	"tdev/internal/protocol"
 	"tdev/internal/reconnect"
 	"tdev/internal/sshx"
+	"tdev/internal/terminal"
 	"tdev/internal/tmux"
 )
 
 func (a *app) attach(ctx context.Context, t target, original tmux.Status, window string, budget *reconnect.Budget) error {
 	if !terminalAvailable(a.in) {
 		return config.Invalid("attach requires a terminal")
+	}
+	out, isFile := a.out.(*os.File)
+	output := terminal.NewOutput(a.out, t.Name, t.Project, isFile && terminalAvailable(out))
+	if err := output.Start(); err != nil {
+		return err
 	}
 	if t.Local {
 		p := config.Project{Name: t.Project}
@@ -29,7 +36,7 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 		if err != nil {
 			return err
 		}
-		return a.manager().Attach(ctx, p, original.SessionID, original.Generation, window, "a"+config.NewID(), a.in, a.out, a.errOut)
+		return a.manager().AttachClient(ctx, p, original.SessionID, original.Generation, window, "a"+config.NewID(), a.in.(*os.File), output, a.errOut)
 	}
 	terminal := a.in.(*os.File)
 	state, err := term.GetState(int(terminal.Fd()))
@@ -99,7 +106,11 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 		}
 		cmd := sshx.Command(ctx, "ssh", args...)
 		cmd.Stdin = a.in
-		cmd.Stdout = a.out
+		if e = output.Start(); e != nil {
+			closeOwned()
+			return e
+		}
+		cmd.Stdout = output
 		cmd.Stderr = a.errOut
 		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 		if e = cmd.Start(); e != nil {
@@ -152,7 +163,8 @@ func (a *app) attach(ctx context.Context, t target, original tmux.Status, window
 		if e == nil {
 			return nil
 		}
-		exit, ok := e.(*exec.ExitError)
+		var exit *exec.ExitError
+		ok := errors.As(e, &exit)
 		if ok && exit.ExitCode() == 5 {
 			return protocol.Fail("SESSION_NOT_FOUND", 5, "original session ended before attachment")
 		}

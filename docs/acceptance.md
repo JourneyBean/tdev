@@ -1,8 +1,28 @@
 # 开发验收记录
 
-Last verified: 2026-11-10。源码版本：0.6.0。下表保留集成验收使用的开发版版本号。
+Last verified: 2026-11-13。源码版本：0.7.0。下表保留集成验收使用的开发版版本号。
 
 本记录汇总第一版核心功能的自动化验证、环境实测和待验证项。
+
+## v0.7.0 版本验收（2026-11-13）
+
+版本包含目录创建确认与客户端标题过滤，Makefile、源码、README 和发布说明统一为 0.7.0。
+
+当前工作区完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s -json ./...` 通过，含子测试 314 项通过，fish 子测试因缺少解释器跳过；CLI 210.432 秒、真实隔离 tmux 13.438 秒。原生环境为 Linux amd64、Go 1.27.3、tmux 3.6。`make check` 与 Linux/macOS amd64/arm64 四平台 `make cross` 通过，构建信息与目标平台一致；Linux amd64 产物 JSON version 返回 0.6.0、协议与项目 schema 1、post-install-v1。本轮完整测试日志保留在本机临时目录。
+
+版本同步至 0.7.0 后，`make check`、`make cross` 与 `make build` 再次通过，本机构建和 Linux amd64 交叉构建产物均返回版本 0.7.0。公开候选文件、文件名及四平台二进制敏感标记扫描通过。功能源码沿用上述完整回归版本，标签流水线对最终发布提交再次执行完整验收。
+
+历史版本兼容专项从 `v0.6.0` 标签源码构建旧程序，使用临时配置、状态根、私有 tmux socket 和 `/dev/null` 配置创建 schema 1 会话，再由当前程序执行 post-install 迁移至 schema 2。旧程序再次 post-install 返回 PARTIAL_SUCCESS（退出 9），真实 PTY 附着返回 PROTOCOL_INCOMPATIBLE（退出 8）。迁移前后 pane ID、PID 与 session generation 一致。该专项验证旧程序面对新会话配置的行为；签名安装器的完整跨版本回滚链仍待补验。
+
+现有签名升级回归的不同版本程序均从当前源码注入版本号构建。v0.7.0 发布说明记录先升级客户端再升级服务端、重新附着要求及 schema 回滚限制；恢复原会话使用支持 schema 2 的版本。macOS 原生终端与完整嵌套 tmux 的交互、自动逆迁移及真实历史签名包的完整回滚链仍待验证。
+
+公开候选文件及文件名模式扫描未发现私钥、访问令牌、个人目录或私网 IP；README 的一处内部域名模式命中经复核为通用服务地址示例。该检查覆盖当前文件，提交元数据与发布 CI、签名产物需在实际提交发布时复查。
+
+## 项目目录创建确认（2026-11-11）
+
+真实隔离 SSH 与 PTY 项目管理回归通过：目录缺失时默认拒绝并重新输入路径，确认后递归创建含中文、空格、引号及 shell 元字符的多层目录并保存远端项目；Ctrl-C 取消确认时目录和项目均保持未创建。JSON 非交互 create 遇到缺失目录返回配置错误、退出 2，目录保持未创建。本机 shell 回归覆盖 `~/` 展开、重复创建、已有文件、失效符号链接、非法路径、mkdir 失败及 shell 取消分类。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过：CLI 214.983 秒、真实隔离 tmux 13.114 秒。`go vet ./...`、`gofmt -l cmd internal`、`git diff --check`、Linux/macOS amd64/arm64 四平台 `make cross` 与 `make build` 通过。新增目录创建交互实测位于 Linux；macOS 仅交叉构建，受限账号和只读远端文件系统上的创建失败尚待实测。
 
 ## v0.6.0 版本验收
 
@@ -398,3 +418,33 @@ daemon 回归验证操作取消后移除登记、跨目录 socket 和任意用�
 项目配置回归使用 edit --stdin 验证添加、修改目标并保持映射 ID、删除映射及对应客户端 override 清理；真实 SSH 项目管理和拒绝 session status 的远端夹具同步使用 edit 修改映射。参数用例拒绝缺少规则、重复监听、project 路径充当 server 及旧 add/remove 入口。服务器名称补全与既有 override ID 补全回归通过。
 
 覆盖边界：原生执行于 Linux，测试配置、SSH 身份、状态根与 tmux socket 均隔离。macOS 验证为交叉构建，原生网络与终端行为沿用前文待验收范围。临时转发状态来自当前客户端 daemon；前台组随命令或 daemon 结束释放，后台组支持 daemon restart 恢复。
+
+## tmux 振铃透传调研（2026-11-10）
+
+Linux tmux 3.6、xterm-256color、临时私有 socket 与真实 PTY 共记录 18 阶段，17 项预设断言通过；分析移除 OSC 字符串后统计独立 BEL。覆盖当前及后台窗口、焦点、重复未读振铃、visual-bell 三种模式、bell-action 过滤、monitor-bell 关闭和两个普通客户端。一次写入 10 个 BEL 实测合并为每客户端 1 次；断开期间后台 BEL 保留未读状态，重新附着未补响。临时 Go overlay 在本机及隔离 SSH 的既有附着集成测试中增加独立 BEL 断言，两条链路均通过。首次 overlay 生成因标题断言次数校验提前失败，修正后通过。证据位于 .summary-web/evidence/，详见 [调研记录](tmux-bell-forwarding.md)。
+
+macOS 原生终端提醒表现、真实 agent、嵌套 tmux、其他 tmux 版本和 control mode 实测仍待完成；control mode 排除行为由 3.6 源码确认。
+
+完整回归 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 通过，CLI 211.422 秒、真实 tmux 包 13.483 秒；`go vet ./...`、`gofmt -l cmd internal` 和 `git diff --check` 通过。本轮仅新增研究文档与本地证据，未触及平台实现，未运行交叉构建。完整测试输出保存在 `.summary-web/evidence/bell-research-go-test.log`。
+
+## 客户端标题调研（2026-11-11）
+
+Linux tmux 3.6、xterm-256color、独立临时 socket、`/dev/null` 配置和真实 PTY 验证标题状态过滤。修订后 30 项断言通过，包含 122 个合成分块位置；未读数按 `0 → 1 → 2 → 1 → 0` 变化，同一窗口的 bell/activity 合并计一次，失焦当前窗口补充状态随聚焦清除，重新附着收到未读快照。`visual-bell on` 下独立 BEL 为 0，状态 OSC 仍更新。首轮 activity 对照状态残留造成 1 项失败，证据保留并在后续 bell-only 对照前关闭该监控。
+
+本机 stdout 管道未收到标题，附着 TTY 收到标题，确认过滤需 PTY 中继。control mode 订阅收到初始及清除状态。研究解析器保持 OSC 8/52，支持 OSC 0/1/2、BEL/ST 和跨读块序列。探针与两轮结果保存在 `.summary-web/evidence/`，详见 [研究记录](tmux-client-title.md)。
+
+覆盖边界：正式客户端过滤、SSH 加入过滤器后的端到端链路、本机 PTY 中继的 resize/信号/退出、真实终端及 macOS、其他 tmux 版本、嵌套 DCS、异常序列恢复和 silence 触发待验证。额外 control 客户端对生产焦点 hook 和会话生命周期的影响待评估。本轮保持产品代码原状。
+
+完整回归 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 通过，CLI 212.638 秒、真实 tmux 包 13.331 秒；`go vet ./...`、`gofmt -l cmd internal` 和 `git diff --check` 通过。测试日志保存在 `.summary-web/evidence/client-title-go-test.log`。本轮仅修改研究文档与本地证据，未运行交叉构建。
+
+## 客户端标题过滤实现验收（2026-11-11）
+
+本机和真实隔离 OpenSSH/PTY 集成验证客户端保留 `tdev: server/project`，提醒时加 `[!]`。覆盖 runtime schema 1 向 2 迁移、普通程序 pane 标题、服务端模板改写、直接与嵌套 DCS 中的 OSC 0/1/2 拦截，以及 OSC 8、OSC 52 和独立 BEL 保留。双连接名称访问同一远端 session 时各自标题独立；服务端模板只保存项目或 scratch 逻辑名称与提醒标记。焦点进入/离开、逐窗口清除、重新附着保留未读、窗口缩放、Ctrl-C 和 tmux 内创建 scratch 后切换及返回均通过。
+
+真实 tmux 验证原生及补充标志按窗口合并，两个待查看窗口输出两个标记。安装和升级回归检查迁移后出现的新标题输出，保留 pane、PID 与 generation；活跃旧模板迁移报告 reattach_required。高于支持值的 schema 保持原状。
+
+终端解析测试逐个检查输入分块及单字节写入，覆盖 BEL/ST、C1、UTF-8、空标题命令、异常中断、连接重置、1 MiB 缓冲限制和非标题大字符串透传。PTY 生命周期测试验证正常退出、取消、启动失败与输出失败后终端恢复、读取停止和最终输出排空。窗口缩放使用已保存的 PTY 文件描述符执行 ioctl，保持非阻塞输入，以支持取消。
+
+Linux tmux 3.6 的本机与 SSH 场景通过；使用临时解压的 tmux 3.3a 补跑本机标题、焦点、配置保护及迁移测试通过。macOS 原生终端展示与完整嵌套 tmux 会话的最终表现待人工验证；DCS 字节过滤已覆盖嵌套包裹。现有多客户端焦点竞争边界继续适用，双连接名称测试验证标题隔离。
+
+完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 通过，CLI 214.793 秒、真实 tmux 包 13.384 秒。最终 PTY 非阻塞 resize 调整后的 terminal 与本机/SSH 定向竞态回归通过；`make check`、Linux/macOS amd64/arm64 四平台 `make cross`、10 秒分块模糊测试通过。验证日志保存在本地 `.summary-web/evidence/title-implementation-*.log`。

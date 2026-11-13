@@ -1,5 +1,11 @@
 # 开发记录与实现取舍
 
+## 项目向导创建目录
+
+create、edit、setup 和 open 缺失项目时复用目录确认流程。远端 shell 成功返回缺失标记后，向导询问是否创建目录，默认选择否；拒绝后重新输入路径，Ctrl-C 取消向导。确认后通过现有 OpenSSH 传输（本机项目使用本机 shell）执行 `mkdir -p`，再次解析物理路径后继续配置。路径统一校验和 shell 引用，支持 `~/`、空格、引号及 Unicode。
+
+目录创建立即生效，提示明确说明后续取消向导仍保留目录；项目配置在最终保存确认后写入。已有文件、失效符号链接及传输失败沿用错误处理。非交互命令遇到缺失目录返回配置错误，保持 JSON 和自动化调用的非交互行为。
+
 ## 本地 daemon 与功能选择
 
 本地 daemon 通过私有 Unix socket 管理控制连接、后台转发及 SSHFS 启动。API、completion 与交互终端共享控制 master；转发、scp 和 SSHFS 使用独立传输。daemon 生命周期锁、逐目标获取锁及独立代次 socket 协调多进程和重连；首次交互认证在调用终端完成，后台使用 BatchMode。
@@ -12,7 +18,7 @@
 
 已成功建立过的 R 映射在断线重连时，旧远端 SSH 连接可能仍占用监听端口。此时 remote port forwarding failed 按原转发重连预算继续等待；首次创建的端口冲突仍立即失败。恢复过程通过新连接重新绑定，保留其他使用者的监听。
 
-Last verified: 2026-11-10。版本：0.6.0。历史集成验收使用开发版版本号，见验收记录。
+Last verified: 2026-11-13。版本：0.7.0。历史集成验收使用开发版版本号，见验收记录。
 
 v0.5.0 汇总本地连接监督、open 功能选择、tmux 标题提醒、升级连接恢复与 ps 快照。源码默认值与 Makefile 统一为 0.5.0，机器协议与配置 schema 保持为 1，新增 ps-v1 能力，沿用现有安装签名公钥。GitHub/GitLab 的完整竞态测试超时统一为 300 秒，覆盖新增的真实签名升级与双向映射恢复用例。
 
@@ -37,6 +43,12 @@ GitHub Actions 在 main 推送、PR 及版本标签事件中运行静态检查�
 发布公开后调用独立的只读验证 workflow，通过匿名版本下载地址校验全部附件及 Linux 在线安装。验证 workflow 支持手动输入已有标签，供网络问题恢复后单独重验。
 
 签名使用 Actions Secret 中的既有 PKCS8 Ed25519 密钥，先核对仓库公钥，再生成四平台签名包；临时密钥按步骤清理。发布前验证签名、摘要及安装脚本，固定上传 14 个文件，全部上传成功后公开草稿。测试任务只读，发布任务单独授予 contents: write；同一标签的执行串行化。现有 Release 保持原样，失败草稿由维护者检查后处理。配置步骤见 [GitHub Actions 发布](github-release.md)。
+
+## v0.7.0 版本
+
+源码、Makefile 和 README 统一为 0.7.0。增加项目向导目录创建确认和客户端标题过滤，本机附着通过独立 PTY 中继，远端继续使用系统 OpenSSH。机器协议与项目配置 schema 保持为 1，tmux runtime schema 升至 2，沿用现有签名公钥。
+
+升级本机与远端后，按 post-install 报告重新附着。schema 2 会话保留在 tmux 中；回滚至 v0.6.0 后，旧程序拒绝重新附着。恢复使用支持 schema 2 的版本并重新 open，保留原 pane 与进程；自动逆迁移留待后续实现。升级顺序及覆盖边界见 [v0.7.0 发布说明](releases/v0.7.0.md)与[验收记录](acceptance.md)。
 
 ## v0.6.0 版本
 
@@ -122,7 +134,7 @@ setup 的客户端配置锁仅覆盖重新读取、冲突检查和连接配置�
 
 setup 的初次项目发现与首个项目创建后的刷新仅读取项目定义，返回及缓存的会话状态为 unknown，由 ls 刷新实际状态。sh 创建窗口后，仅在接下来需要 attach 时额外读取会话状态；JSON 输出与本机 tmux 内窗口切换直接使用创建结果。显式指定项目的配置、转发、传输、挂载与补全操作独立于 tmux 状态；省略项目名时读取当前会话的项目标记用于定位目标。doctor 和安装前检查保留 tmux 程序依赖检查。
 
-`open` 完成会话、可选挂载和转发准备后，在进入 tmux 前向终端标准输出发送 OSC 2，将标题设为 `tdev: server/project`，本机服务器名为 local。标准输出重定向时跳过标题序列；标题使用已验证的服务器名和项目名。
+交互附着由客户端统一生成 OSC 2 标题 `tdev: server/project`，本机连接名称为 local；有提醒时加 `[!]`。服务端只传项目或 scratch 的逻辑名称与窗口提醒标记，客户端过滤后生成完整标题。连接名称保存在客户端，标准输出重定向时跳过标题生成。详见 [终端标题](tmux-client-title.md)。
 
 默认服务器字段已从运行配置和 setup 选择逻辑移除；已有文件的 default_server 仅在解码时丢弃，setup 重写配置时移除该字段，其他未知字段继续严格拒绝。服务器顺序统一按名称排列，本机项目优先规则保持一致。窗口 ID 的旧补全分支已删除。forward 按 server 运行显式临时映射，项目映射统一由 edit 修改，客户端偏好由 override 保存。旧保存参数及把数字参数解释为端口的简写已移除。
 
@@ -251,7 +263,7 @@ setup 自动读取已有连接，也支持使用现有 identity/agent 创建私�
 
 ## tmux 标题提醒
 
-项目与 scratch 创建时设置运行中的 tmux 标题及 hook，已有会话在下次附着前补齐。本机和远端使用同一逻辑，状态与 hook 随 tmux 运行时保存。标题为 `session:window`，任一窗口有原生 bell、activity、silence 提醒或失焦 bell 标记时加 `[!]`。开启 `monitor-activity` 时普通输出也属于提醒。agent 完成信号沿用应用发出的 bell。
+项目与 scratch 创建时设置运行中的 tmux 标题及 hook，已有会话在下次附着前补齐。本机和远端使用同一逻辑，状态与 hook 随 tmux 运行时保存。服务端标题模板输出项目或 scratch 的逻辑名称与窗口提醒标记，由客户端生成 `tdev: server/project`；任一窗口有原生 bell、activity、silence 提醒或失焦 bell 标记时加 `[!]`。开启 `monitor-activity` 时普通输出也属于提醒。agent 完成信号沿用应用发出的 bell。
 
 `client-focus-out` 记录 session 失焦；此时当前窗口的 `alert-bell` 设置窗口选项 `@tdev_unfocused_bell`。重新聚焦清除当前窗口的补充标记；切换窗口清除进入窗口的补充标记。重新附着保留补充标记，附着或切换 session 后默认聚焦，等待终端后续焦点上报。其他窗口标记继续汇总，原生提醒由 tmux 清除。应用仅使用 tmux 命令与格式，无需 agent hook、后台进程或轮询。运行时配置 schema 与 hook 索引保证重复附着沿用同一组 hook；安装后的迁移策略见下文。
 
@@ -278,11 +290,11 @@ go.mod/go.sum。运行产物无需 Go。
 
 daemon 在启动时记录程序摘要。refresh 在生命周期锁内比较目标摘要：一致时保持现有进程，变化或旧 daemon 未提供摘要时用目标程序重启；已停止的 daemon 保持停止。其他配置根的 daemon 由各自 post-install 管理。
 
-tmux session 的 `@tdev_runtime_config_version` 记录配置 schema，当前为 1。缺失或 0 迁移到当前版本，相等时跳过，更高值或未知旧提醒版本返回兼容错误并保留配置。`@tdev_alerts_version=1` 保留为旧客户端兼容标记；项目元数据 schema 与 session generation 保持原语义。版本最后提交，失败后保留原值供幂等重试。创建和附着共用迁移器，批量处理额外核对枚举时的 generation。
+tmux session 的 `@tdev_runtime_config_version` 记录配置 schema，当前为 2。缺失、0 或 1 迁移到当前版本，相等时跳过，更高值或未知旧提醒版本返回兼容错误并保留配置。`@tdev_alerts_version=1` 保留为旧客户端兼容标记；项目元数据 schema 与 session generation 保持原语义。版本最后提交，失败后保留原值供幂等重试。创建和附着共用迁移器，批量处理额外核对枚举时的 generation。
 
 session 的 `@tdev_config_owner` 保存规范化配置根的摘要；项目按当前定义 UUID 匹配，普通、其他配置根及未完成的 session 保留。新 scratch 写入归属，旧 scratch 在显式附着时认领，批量认领需 `post-install --adopt-legacy-scratch`。迁移锁存放在共享用户状态根，以 tmux socket 和 session 标识区分，跨配置根串行化同一会话的认领。
 
-迁移精确识别旧版 tdev hook，去除重复动作，保留用户动作及继承的全局动作。在 9000–9999 中选择所有相关 hook 均空闲的索引，并记录 `@tdev_runtime_hook_index`；重试复用该索引，冲突报告错误。原生提醒、失焦 bell 标记、已有焦点状态、窗口、pane 和 session generation 保留。首次开启 focus-events 时，为已附着的迁移会话返回 reattach_required；终端焦点上报需重新附着，标题配置可直接更新。
+迁移精确识别旧版 tdev hook，去除重复动作，保留用户动作及继承的全局动作。在 9000–9999 中选择所有相关 hook 均空闲的索引，并记录 `@tdev_runtime_hook_index`；重试复用该索引，冲突报告错误。原生提醒、失焦 bell 标记、已有焦点状态、窗口、pane 和 session generation 保留。首次开启 focus-events 或迁移旧标题协议时，为已附着会话返回 reattach_required；更新客户端并重新附着以加载焦点上报与客户端标题过滤器。
 
 ## 服务器临时转发
 
@@ -291,3 +303,17 @@ session 的 `@tdev_config_owner` 保存规范化配置根的摘要；项目按�
 `--foreground` 使用存续连接绑定使用权，命令退出或客户端异常结束时释放监听；普通非交互命令的 timeout 不限制前台运行时长。daemon 终止时前台命令结束。ls 增加 forward 类型并展示临时组的监听状态，数据来自当前客户端的实时 daemon 状态，省去发现缓存；ls --type forward 省去远端项目与 tmux 查询。
 
 项目共享映射统一由 edit 向导或 edit --stdin 修改。删除映射时清理当前客户端对应的 override；forward add/remove 入口移除。forward 位置参数补全使用服务器名称，stop 补全包含临时转发名称。已有 daemon 缺少临时组能力时，forward 提示执行 daemon restart。
+
+## tmux 振铃透传调研
+
+2026-11-10：[振铃透传调研](tmux-bell-forwarding.md) 确认 bell-action any、monitor-bell on 配合 visual-bell off 可沿原生路径发送 BEL。实现沿用原生机制及用户的 visual-bell 设置。连续事件可合并，多客户端各自接收，终端负责最终提醒呈现。
+
+## 客户端标题与提醒状态调研
+
+2026-11-11：[客户端标题调研](tmux-client-title.md) 确认原 tmux 模板覆盖附着前的 `tdev: server/project`。实现将连接名称留在客户端，由服务端通过标题 OSC 输出带版本的提醒状态，客户端过滤后生成完整标题，独立 BEL 继续透传。原生窗口提醒与失焦补充标志按窗口合并计数。真实 PTY 验证状态变化、已读清除和重新附着快照；本机 tmux 直接写附着 TTY，过滤通过 PTY 中继接入。
+
+## 客户端标题过滤实现
+
+客户端统一拦截 OSC 0/1/2，并处理 tmux/screen DCS 透传包裹；有效状态协议生成本地完整标题，其他标题写入丢弃。服务端 runtime schema 2 的模板仅包含项目或 scratch 名称及按窗口合并的提醒标记；连接名称保留在客户端。现有 hook、原生未读和补充标志沿用既有清除语义。实际显示保留 `[!]`，状态标记同时提供待查看窗口数量。
+
+本机通过独立 PTY 中继以截获 tmux 对 TTY 的直接写入，转发 raw 输入和窗口大小，退出时停止输入读取、排空输出并恢复调用方终端。远端在本地过滤 OpenSSH 输出，API 附着保留原始流。过滤器跨读块解析，保留 UTF-8、非标题 OSC、普通图形 DCS 和独立 BEL；待识别字符串上限为 1 MiB，透传嵌套上限为 8 层，超限或未完成的相关缓冲丢弃。行为及兼容约束见 [终端标题](tmux-client-title.md)。

@@ -125,6 +125,6 @@ tdev --json api binary post-install      # 当前机器的非交互入口
 
 处理范围为指定配置根；其他配置根分别用 `--config-dir` 执行。项目会话按 UUID 匹配，新 scratch 带配置根归属。旧 scratch 缺少归属时显示 skipped，可通过重新附着认领，或显式执行 `tdev post-install --adopt-legacy-scratch` 批量认领当前 tmux server 上尚无归属的 scratch。
 
-tmux 迁移保留进程、窗口和提醒，直接更新标题；配置版本高于当前支持值时保留并报告兼容错误。首次开启焦点事件后，已附着终端需重新附着，报告中的 reattach_required 标记该要求。daemon 程序摘要相同时保持现有进程，变化时重启并恢复连接；已停止的 daemon 保持停止。
+tmux 迁移保留进程、窗口和提醒，直接更新标题；配置版本高于当前支持值时保留并报告兼容错误。首次开启焦点事件或迁移到 runtime schema 2 的客户端标题协议后，已附着终端需更新客户端并重新附着，报告中的 reattach_required 标记该要求。daemon 程序摘要相同时保持现有进程，变化时重启并恢复连接；已停止的 daemon 保持停止。
 
 旧客户端首次升级后仍执行旧升级流程，需运行安装后的目标路径执行 post-install。回滚目标缺少 post-install 支持时，回滚结果为部分成功；该版本的后续处理需按其兼容说明执行，已有较新 tmux 配置保留。直接解包或外部包管理器安装后，也可显式调用 post-install。

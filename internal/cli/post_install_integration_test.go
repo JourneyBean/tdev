@@ -64,7 +64,9 @@ func TestPostInstallMigratesLiveSessionAndRetries(t *testing.T) {
 	terminal.write(t, "printf 'POST_INSTALL_READY\\n'\r")
 	terminal.waitText(t, "POST_INSTALL_READY\r\n")
 	pane := runTmux("display-message", "-p", "-t", s.SessionID, "#{pane_id}:#{pane_pid}")
+	titleOffset := 0
 	stale := func() {
+		titleOffset = len(terminal.output.String())
 		runTmux("set-option", "-t", s.SessionID, "set-titles-string", "legacy-live-title")
 		runTmux("set-option", "-u", "-t", s.SessionID, "@tdev_runtime_config_version")
 	}
@@ -79,6 +81,11 @@ func TestPostInstallMigratesLiveSessionAndRetries(t *testing.T) {
 		if json.Unmarshal(b, &decoded) != nil || decoded.PostInstall.Version != "0.5.1" || len(decoded.PostInstall.Hooks) != 2 {
 			t.Fatalf("target hooks missing: %s", b)
 		}
+		rowsJSON, _ := json.Marshal(decoded.PostInstall.Hooks[0].Data)
+		var rows []tmux.RuntimeSession
+		if json.Unmarshal(rowsJSON, &rows) != nil || len(rows) != 1 || !rows[0].Reattach {
+			t.Fatalf("template migration did not request a new client attachment: %s", rowsJSON)
+		}
 	}
 	// The destination is new, but existing sessions still require migration.
 	r := executeBinary(t, installer, root, "", "", 0, "install", "--release-dir", release, "--public-key", filepath.Join(release, "release.pub"), "--destination", destination, "--completion", "none", "-y")
@@ -87,8 +94,8 @@ func TestPostInstallMigratesLiveSessionAndRetries(t *testing.T) {
 		t.Helper()
 		deadline := time.Now().Add(5 * time.Second)
 		for {
-			parts := strings.Split(terminal.output.String(), "\x1b]0;")
-			if len(parts) > 1 && strings.HasPrefix(parts[len(parts)-1], s.SessionName+":main\a") {
+			parts := strings.Split(terminal.output.String()[titleOffset:], "\x1b]2;")
+			if len(parts) > 1 && strings.HasPrefix(parts[len(parts)-1], "tdev: local/demo\a") {
 				return
 			}
 			if time.Now().After(deadline) {
@@ -114,7 +121,7 @@ func TestPostInstallMigratesLiveSessionAndRetries(t *testing.T) {
 	}
 	waitAlert()
 	// A future schema produces partial success while later hooks still run.
-	runTmux("set-option", "-t", s.SessionID, "@tdev_runtime_config_version", "2")
+	runTmux("set-option", "-t", s.SessionID, "@tdev_runtime_config_version", "3")
 	r = executeBinary(t, destination, root, "", "", 9, "upgrade", "--release-dir", release, "-y")
 	if r.Error == nil || r.Error.Code != "PARTIAL_SUCCESS" {
 		t.Fatalf("future schema: %+v", r)
@@ -126,7 +133,7 @@ func TestPostInstallMigratesLiveSessionAndRetries(t *testing.T) {
 	if json.Unmarshal(b, &details) != nil || len(details.PostInstall.Hooks) != 2 || details.PostInstall.Hooks[0].Status != "failed" || details.PostInstall.Hooks[1].Status != "succeeded" {
 		t.Fatalf("partial hook report: %s", b)
 	}
-	if runTmux("show-options", "-v", "-t", s.SessionID, "@tdev_runtime_config_version") != "2" {
+	if runTmux("show-options", "-v", "-t", s.SessionID, "@tdev_runtime_config_version") != "3" {
 		t.Fatal("future schema overwritten")
 	}
 	stale()
