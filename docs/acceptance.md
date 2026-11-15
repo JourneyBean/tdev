@@ -14,6 +14,9 @@ Last verified: 2026-11-15。源码基础版本：0.8.0。下表保留集成验�
 以 C locale 启动客户端验证两次断线、取消重连及 open 创建向导（15.253 秒通过）。
 新增真实 SSH 登录 shell 专项，检查 C.UTF-8、短提示符和 UTF-8 charmap。
 
+旧版 tmux 停止最后一个会话时，成功返回空列表按 missing 处理；确定性空列表回归及
+完整真实 tmux 竞态测试通过（12.650 秒），make check 和四平台 make cross 通过。
+
 源码默认值、Makefile 和 README 基础版本统一为 0.8.0；四平台开发构建及静态检查通过。
 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，
 CLI 227.052 秒、真实隔离 tmux 13.464 秒。

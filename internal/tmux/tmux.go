@@ -66,6 +66,11 @@ func (m Manager) Status(ctx context.Context, p config.Project) (Status, error) {
 		}
 		return s, err
 	}
+	// Older tmux servers can return a successful empty list while shutting down
+	// after the final session is killed.
+	if out == "" {
+		return s, nil
+	}
 	var owned []string
 	var occupied string
 	for _, line := range strings.Split(out, "\n") {

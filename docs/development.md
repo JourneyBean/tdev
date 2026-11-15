@@ -21,6 +21,8 @@ create、edit、setup 和 open 缺失项目时复用目录确认流程。远端 
 
 ## 本地 daemon 与功能选择
 
+tmux 停止最后一个会话后，旧版服务退出期间可能成功返回空会话列表，Status 将其识别为 missing；非零退出的传输和权限错误保持原处理。
+
 本地 daemon 通过私有 Unix socket 管理控制连接、后台转发及 SSHFS 启动。API、completion 与交互终端共享控制 master；转发、scp 和 SSHFS 使用独立传输。daemon 生命周期锁、逐目标获取锁及独立代次 socket 协调多进程和重连；首次交互认证在调用终端完成，后台使用 BatchMode。
 
 默认 open 的附属资源随 shell 退出释放；多个窗口共享使用权，最后一个退出才清理临时资源。显式服务模式 `open --only forward/sshfs` 后台保留。存续请求断开会回收异常退出客户端的使用权；挂载沿用身份核对与安全卸载。daemon restart 恢复后台转发和活跃 open 的使用权；stop 保持停止，start 恢复。后续 web 功能保留入口并在执行前报告尚未实现。行为、隐私边界及运维细节见 [本地 daemon 与 SSH 连接管理](ssh-connection-reuse.md)。

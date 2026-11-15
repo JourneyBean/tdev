@@ -101,6 +101,17 @@ func TestConcurrentEnsureSaveAndStop(t *testing.T) {
 		t.Fatal("stop deleted definition", err)
 	}
 }
+func TestEmptySessionListMeansMissing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	s, err := (Manager{}).Status(context.Background(), config.Project{Name: "demo"})
+	if err != nil || s.Status != "missing" {
+		t.Fatalf("empty session list: %+v %v", s, err)
+	}
+}
 func TestPersistentShellAndManualWindows(t *testing.T) {
 	m, p, ctx := fixture(t)
 	s, err := m.Ensure(ctx, p)
