@@ -186,7 +186,7 @@ func TestClientProjectManagement(t *testing.T) {
 			t.Fatal("management started a session", status, err)
 		}
 	}
-	clientConfig, _ := os.ReadFile(filepath.Join(root, "client.yaml"))
+	clientConfig, _ := os.ReadFile(filepath.Join(root, "config.yaml"))
 	if strings.Contains(string(clientConfig), directory) {
 		t.Fatal("remote path cached on client")
 	}
@@ -231,7 +231,7 @@ func TestClientProjectManagement(t *testing.T) {
 		if err != nil || len(prefs.Servers) != 2 {
 			t.Fatal("selection changed registered servers", err)
 		}
-		stored, err := os.ReadFile(filepath.Join(root, "client.yaml"))
+		stored, err := os.ReadFile(filepath.Join(root, "config.yaml"))
 		if err != nil || strings.Contains(string(stored), "default_server:") {
 			t.Fatal("setup persisted a default server", err)
 		}

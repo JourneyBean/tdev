@@ -135,7 +135,7 @@ func (a *app) projectCommands() {
 		}
 		if override.ProjectID == "" {
 			current := t.Server.Projects[p.Name]
-			if current.ProjectID == p.ID {
+			if current.ProjectID == p.ID || (current.Declared && current.ProjectID == "") {
 				for id := range current.Forwards {
 					if !kept[id] {
 						override = cloneOverride(current)
@@ -144,14 +144,14 @@ func (a *app) projectCommands() {
 				}
 			}
 		}
-		if override.ProjectID == p.ID {
+		if override.ProjectID == p.ID || (override.Declared && override.ProjectID == "") {
 			for id := range override.Forwards {
 				if !kept[id] {
 					delete(override.Forwards, id)
 				}
 			}
 		}
-		if override.ProjectID != "" {
+		if override.ProjectID != "" || override.Declared {
 			if err = a.saveOverride(ctx, t, p, func(o *projectOverride) error { *o = override; return nil }); err != nil {
 				return nil, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "project saved; client overrides could not be saved: " + err.Error()}
 			}
@@ -284,7 +284,7 @@ func (a *app) createRemoteProject(ctx context.Context, t target, dir string, int
 	if err = json.Unmarshal(data, &p); err != nil {
 		return p, err
 	}
-	if override.ProjectID != "" {
+	if override.ProjectID != "" || override.Declared {
 		if err = a.saveOverride(ctx, t, p, func(o *projectOverride) error { *o = override; return nil }); err != nil {
 			return p, &protocol.Error{Code: "PARTIAL_SUCCESS", Exit: 9, Message: "project created; client overrides could not be saved: " + err.Error()}
 		}
@@ -552,5 +552,6 @@ func cloneOverride(o projectOverride) projectOverride {
 	data, _ := json.Marshal(o)
 	var copy projectOverride
 	_ = json.Unmarshal(data, &copy)
+	copy.Declared = o.Declared
 	return copy
 }

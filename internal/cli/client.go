@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -43,7 +42,7 @@ func (p policyPatch) apply(v reconnect.Policy) reconnect.Policy {
 type server struct {
 	SSHAlias        string                     `yaml:"ssh_alias"`
 	SSHConfig       string                     `yaml:"ssh_config,omitempty"`
-	RemoteBinary    string                     `yaml:"remote_binary"`
+	RemoteBinary    string                     `yaml:"remote_binary,omitempty"`
 	RemoteConfigDir string                     `yaml:"remote_config_dir,omitempty"`
 	Reconnect       policyPatches              `yaml:"reconnect,omitempty"`
 	Projects        map[string]projectOverride `yaml:"-"`
@@ -69,27 +68,11 @@ func defaultPreferences() preferences {
 	return preferences{SchemaVersion: 1, Servers: map[string]server{}, Reconnect: reconnect.Defaults(), SSH: sshx.Defaults()}
 }
 func (a *app) prefs() (preferences, error) {
-	p := defaultPreferences()
-	b, err := os.ReadFile(filepath.Join(a.store.Root, "client.yaml"))
-	if os.IsNotExist(err) {
-		return p, nil
-	}
+	state, err := a.readClientState()
 	if err != nil {
-		return p, err
+		return preferences{}, err
 	}
-	// Accept the retired input field when reading existing client files, then
-	// discard it. preferences itself cannot use or serialize a default server.
-	input := struct {
-		Current              preferences `yaml:",inline"`
-		IgnoredDefaultServer string      `yaml:"default_server,omitempty"`
-	}{Current: p}
-	if err = config.Decode(b, &input); err != nil {
-		return p, err
-	}
-	p = input.Current
-	if p.SchemaVersion != 1 {
-		return p, config.Invalid("invalid client configuration")
-	}
+	p := state.prefs
 	if err = p.SSH.Validate(); err != nil {
 		return p, err
 	}
@@ -109,10 +92,7 @@ func (a *app) prefs() (preferences, error) {
 		}
 	}
 	p.SSH.ConfigFile = a.sshConfig
-	overrides, err := a.readOverrides()
-	if err != nil {
-		return p, err
-	}
+	overrides := state.overrides
 	for name, s := range p.Servers {
 		s.Projects = overrides.Servers[name]
 		p.Servers[name] = s
@@ -127,7 +107,7 @@ func validateServer(n string, s server) error {
 		return config.Invalid("invalid server name, SSH alias or remote binary")
 	}
 	for name, override := range s.Projects {
-		if !config.ValidName(name) || override.ProjectID == "" {
+		if !config.ValidName(name) || (override.ProjectID == "" && !override.Declared) {
 			return config.Invalid("invalid local project override")
 		}
 	}

@@ -65,6 +65,7 @@ func (a *app) bundle(ctx context.Context, c *cobra.Command, goos, arch string, r
 func (a *app) apiUpdate(local *cobra.Command) {
 	g := group(local, "binary", "Inspect/install/rollback a verified local binary")
 	a.postInstallCommand(g)
+	a.skillCommandsOn(g, "skills")
 	a.command(g, "platform", "Report runtime platform without requiring tmux", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
 		return map[string]string{"os": runtime.GOOS, "arch": runtime.GOARCH}, nil
 	})
@@ -138,7 +139,11 @@ func (a *app) updateCommands() {
 					a.upgradeNotice(remote)
 				}
 				if rollback {
-					b, err := a.call(c.Context(), t, nil, "binary", "rollback", "--destination", t.Server.RemoteBinary)
+					mode, err := a.remoteSkills(c.Context(), t)
+					if err != nil {
+						return err
+					}
+					b, err := a.call(c.Context(), t, nil, skillModeArgs([]string{"binary", "rollback", "--destination", t.Server.RemoteBinary}, mode)...)
 					return a.result(b, err)
 				}
 				result, err := a.installRemote(c.Context(), t, c)
@@ -341,7 +346,11 @@ func (a *app) installRemote(ctx context.Context, t target, c *cobra.Command) (an
 	if b.SourceURL != "" {
 		args = append(args, "--source-url", b.SourceURL)
 	}
-	result, err := a.call(ctx, bootstrap, nil, args...)
+	mode, err := a.remoteSkills(ctx, bootstrap)
+	if err != nil {
+		return nil, err
+	}
+	result, err := a.call(ctx, bootstrap, nil, skillModeArgs(args, mode)...)
 	if err != nil {
 		return nil, err
 	}

@@ -74,13 +74,13 @@ func TestConcurrentRevisionAndBackup(t *testing.T) {
 	if err != nil || now.Revision != 2 {
 		t.Fatalf("%+v %v", now, err)
 	}
-	backup := filepath.Join(s.Root, "projects", "demo.yaml.rev-1.bak")
+	backup := filepath.Join(s.Root, "projects", "demo.yaml.demo.rev-1.bak")
 	b, err := os.ReadFile(backup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var old Project
-	if err = Decode(b, &old); err != nil || old.Revision != 1 || old.Windows[0].Name != "main" {
+	var old map[string]declaration
+	if err = Decode(b, &old); err != nil || old["demo"].Windows[0].Name != "main" {
 		t.Fatalf("backup changed: %s %v", b, err)
 	}
 	for _, path := range []string{backup, filepath.Join(s.Root, "projects", "demo.yaml")} {

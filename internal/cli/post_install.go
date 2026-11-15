@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"tdev/internal/aiskill"
 	"tdev/internal/daemon"
 	"tdev/internal/protocol"
 	"tdev/internal/sshx"
@@ -42,8 +43,26 @@ func (a *app) postInstallCommand(parent *cobra.Command) {
 				if adopt {
 					args = append(args, "--adopt-legacy-scratch")
 				}
-				return a.call(ctx, t, nil, args...)
+				mode, err := a.remoteSkills(ctx, t)
+				if err != nil {
+					return nil, err
+				}
+				return a.call(ctx, t, nil, skillModeArgs(args, mode)...)
 			}
+		}
+		// Ask outside individual hook timeouts on an interactive local invocation.
+		if parent == a.root {
+			targets, err := aiskill.Targets("all", "")
+			if err != nil {
+				return nil, err
+			}
+			mode, err := a.chooseSkills(ctx, aiskill.Detect(targets))
+			if err != nil {
+				return nil, err
+			}
+			approved := *a
+			approved.skillsMode = mode
+			return approved.postInstall(ctx, adopt)
 		}
 		return a.postInstall(ctx, adopt)
 	})
@@ -73,6 +92,7 @@ func (a *app) postInstall(ctx context.Context, adopt bool) (postInstallReport, e
 			}
 			return client.Manage(ctx, "refresh", exe, a.store.Root)
 		}},
+		{"ai-skills", func(ctx context.Context) (any, error) { return a.installSkills(ctx, "all", "") }},
 	}
 	failed := false
 	for _, hook := range hooks {
@@ -96,7 +116,17 @@ func (a *app) postInstall(ctx context.Context, adopt bool) (postInstallReport, e
 func (a *app) targetPostInstall(ctx context.Context, destination string) (json.RawMessage, error) {
 	// The installer keeps its per-destination lock through this subprocess.
 	// Always execute the installed image, including identical-content installs.
-	cmd := sshx.Command(ctx, destination, "--config-dir", a.store.Root, "--timeout", a.timeout.String(), "--json", "api", "binary", "post-install")
+	targets, err := aiskill.Targets("all", "")
+	if err != nil {
+		return nil, err
+	}
+	mode, err := a.chooseSkills(ctx, aiskill.Detect(targets))
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"--config-dir", a.store.Root, "--timeout", a.timeout.String(), "--json", "api", "binary", "post-install"}
+	cmd := sshx.Command(ctx, destination, skillModeArgs(args, mode)...)
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

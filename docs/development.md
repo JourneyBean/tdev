@@ -1,5 +1,18 @@
 # 开发记录与实现取舍
 
+## 开发构建版本
+
+当前基础版本为 0.8.0，源码默认值与 Makefile 同步，变更见 [v0.8.0 发布说明](releases/v0.8.0.md)。
+
+Makefile 保留 VERSION 作为发布基础版本，普通 build/cross 在 make 启动时计算一次 BUILD_VERSION，
+通过现有 ldflags 注入 CLI。开发版本使用 `<基础版本>-git.<12 位提交哈希>[.dirty]`，
+匹配基础版本 tag 的干净提交使用正式版本；源码归档缺少提交信息时使用 `-dev.unknown`。
+dirty 检查包含暂存、未暂存和未忽略的新文件，忽略 bin/dist 构建产物。
+dirty 标记用于识别存在未提交修改，同一提交的不同未提交内容可能显示相同版本。
+四平台交叉构建共享一次计算结果；打包期间应保持源码不变。
+release 目标及其 cross 依赖使用显式基础版本，与现有签名 manifest 和 CI 版本校验保持一致。
+构建仅输出二进制，双端部署与迁移由开发者手动执行。
+
 ## 项目向导创建目录
 
 create、edit、setup 和 open 缺失项目时复用目录确认流程。远端 shell 成功返回缺失标记后，向导询问是否创建目录，默认选择否；拒绝后重新输入路径，Ctrl-C 取消向导。确认后通过现有 OpenSSH 传输（本机项目使用本机 shell）执行 `mkdir -p`，再次解析物理路径后继续配置。路径统一校验和 shell 引用，支持 `~/`、空格、引号及 Unicode。
@@ -18,7 +31,7 @@ create、edit、setup 和 open 缺失项目时复用目录确认流程。远端 
 
 已成功建立过的 R 映射在断线重连时，旧远端 SSH 连接可能仍占用监听端口。此时 remote port forwarding failed 按原转发重连预算继续等待；首次创建的端口冲突仍立即失败。恢复过程通过新连接重新绑定，保留其他使用者的监听。
 
-Last verified: 2026-11-13。版本：0.7.0。历史集成验收使用开发版版本号，见验收记录。
+Last verified: 2026-11-15。基础版本：0.8.0。历史集成验收使用开发版版本号，见验收记录。
 
 v0.5.0 汇总本地连接监督、open 功能选择、tmux 标题提醒、升级连接恢复与 ps 快照。源码默认值与 Makefile 统一为 0.5.0，机器协议与配置 schema 保持为 1，新增 ps-v1 能力，沿用现有安装签名公钥。GitHub/GitLab 的完整竞态测试超时统一为 300 秒，覆盖新增的真实签名升级与双向映射恢复用例。
 
@@ -92,7 +105,7 @@ GitHub Actions 在 main 推送、PR 及版本标签事件中运行静态检查�
 
 ensure 先检查全部目录，再按树建立分屏并标记 pane 身份。pane 使用 tmux 的默认 shell 和启动配置，通过 `send-keys -l` 输入已声明命令，再单独发送 Enter；交互 shell 初始化后执行命令，命令结束后继续保留 shell。显式 `exit` 结束 shell 时保留 pane 输出与退出状态。命令只在新建会话时执行；初始化失败保留 incomplete 会话，重复 open 沿用已有会话。
 
-save 读取 tmux window_layout 与 pane 当前目录，两次快照比较后按 revision 写入。保存方向、嵌套结构、比例和手动新增 pane；启动命令按 pane ID 从原定义保留，新增 pane 保存为空 shell。持久标记继续按窗口生效。普通单 pane 窗口保存为原格式。pane 标记在配置提交后更新，失败返回 PARTIAL_SUCCESS。旧版单 pane 会话首次保存时补齐标记；旧版服务窗口已被手动分屏且缺少标记时，需先为原服务 pane 设置 @tdev_pane_id 为窗口 ID，再保存。
+save 读取 tmux window_layout 与 pane 当前目录，两次快照比较后按 revision 写入。保存方向、嵌套结构、比例和手动新增 pane；启动命令按 pane ID 从原定义保留，新增 pane 保存为空 shell。持久标记继续按窗口生效。普通单 pane 窗口保存为简洁的 dir/command；分屏保存为 row/column。pane 标记在配置提交后更新，失败返回 PARTIAL_SUCCESS。旧版单 pane 会话首次保存时补齐标记；旧版服务窗口已被手动分屏且缺少标记时，需先为原服务 pane 设置 @tdev_pane_id 为窗口 ID，再保存。
 
 API 增加 `pane-layout-v1`，携带 layout 的远端写入先协商该能力。配置 schema 仍为 1；使用分屏定义的机器与编辑配置的客户端需使用支持该能力的版本。交互窗口编辑保留已有布局，pane 配置通过 `edit --stdin` 修改；也可在 tmux 手动分屏后 save。分屏尺寸受 tmux 窗口可用空间限制，比例按整数单元格近似恢复。
 
@@ -146,7 +159,7 @@ ls 并发刷新，每台服务器的版本与项目/会话查询合并为一次 
 
 每次机器请求通过 shell 顺序执行顶层 version、`api version --require` 与实际子命令。用每次生成的随机标记记录各段输出和退出码，本地严格解析。API gate 成功后才执行读写，不依赖 jq 或新增请求封装。多项独立查询使用同一 SSH 批次；stdin 保留给实际写操作。旧服务端显示已读取版本和 upgrade --remote 指引，升级通过上传已验证候选程序引导，原 API 不可用时仍可执行。
 
-create、open 缺失项目和 edit 使用同一份草稿向导。目录、窗口和映射全部收集并验证，最终确认后再写入；完整创建通过 api project create --stdin 原子完成。edit 预填原值并携带原 revision。L 映射的服务地址一次输入 host:port，客户端监听差异按 UUID 和 forward ID 保存在 overrides.yaml。保存定义与保存 override 的部分失败分别报告。
+create、open 缺失项目和 edit 使用同一份草稿向导。目录、窗口和映射全部收集并验证，最终确认后再写入；完整创建通过 api project create --stdin 原子完成。edit 预填原值并携带原 revision。L 映射的服务地址一次输入 host:port，客户端监听差异在 client.overrides 中按目标名称和端口名称声明，UUID 关联保存在内部绑定文件。保存定义与保存 override 的部分失败分别报告。
 
 新建项目 tmux session 使用 `tdev-project-<name>`，UUID 标记验证归属并支持复用旧名称的会话，保留原 session ID 和连接。新项目窗口 main；sh --name 指定新窗口名称，默认 shell。open 默认只建立会话、转发和终端；--mount 显式挂载，独立 mount/unmount 保留。挂载路径按项目 UUID 保存在本机 override；带 shell 的 open 退出时释放本次新建挂载；预先存在及其他使用者所需挂载保留。本机项目直接进入 tmux，转发用本地 TCP listener，文件传输复用暂存与哈希校验。
 
@@ -156,7 +169,7 @@ create、open 缺失项目和 edit 使用同一份草稿向导。目录、窗口
 
 验证连接后探测已有远端程序，读取远端项目定义，按需提示安装。新地址使用私有 SSH profile，既有服务器保留原配置目录与偏好。提交本机连接前重新读取并检查同一服务器配置，冲突时停止，其他服务器的并发改动保留。
 
-`client.yaml` 继续保存连接及重连偏好；本机监听端口差异和附加 -L 单独保存在 `overrides.yaml`。`ls` 和 `open` 每次发现远端定义后合并，覆盖按项目 UUID 和稳定 forward ID 绑定；过期身份、已删除映射、重复监听和非法端口在执行前报错。`get` 保持读取远端原始定义，避免 `save` 把客户端差异写回远端。共享定义通过 edit 修改。
+主配置的 `client` 块保存连接、重连和本机 override 偏好，支持 client.include 拆分；旧 client.yaml、overrides.yaml 在首次保存时备份迁移。`ls` 和 `open` 每次发现远端定义后合并，覆盖按项目 UUID 和稳定 forward ID 绑定；过期身份、已删除映射、重复监听和非法端口在执行前报错。`get` 保持读取远端原始定义，避免 `save` 把客户端差异写回远端。共享定义通过 edit 修改。
 
 ## v0.0.2 安装与分发
 
@@ -175,8 +188,8 @@ forward、push/pull、mount/unmount、doctor、install/upgrade/rollback 已提�
 远端通过按需启动的 CLI/attach 进程管理配置与会话。
 HTTP 域名代理仍属于后续版本。
 
-配置使用严格 YAML/JSON 解码，拒绝重复 key、未知字段和不支持的版本。
-修改持有内核文件锁，比较 revision，保留历史版本后原子写入；配置默认 0600。
+项目文件采用具名项目声明，支持 config.yaml 主配置及 include；无主配置时扫描 projects/*.yaml。手写格式与机器 API 模型分离，解析拒绝重复 key、未知字段、多文档和 YAML 别名。
+修改持有项目锁与配置根共享锁，比较内部 revision、检查源文件内容，保留完整源文件备份后原子写入；配置默认 0600。
 api 接口无确认交互，--json 返回单一协议响应；客户端按 error.code 区分远端错误和连接错误。
 协议握手同时检查 schema 和所需 capability，不以程序补丁版本完全相同作为前提。
 
@@ -279,7 +292,7 @@ Shell 补全提供 local 与远端前缀，裸项目前缀并发查询全部目�
 实际结果和待验证项见[验收记录](acceptance.md)。构建使用 Go 1.27.3，依赖记录于
 go.mod/go.sum。运行产物无需 Go。
 
-配置回退使用对应 `.yaml.rev-N.bak`，读取当前 revision 后显式导入。
+配置回退从 `<源文件>.<项目名>.rev-N.bak` 中取出目标项目声明并合并回源文件。旧格式迁移备份保留 `<源文件>.rev-N.bak` 命名。共享文件恢复保留其他项目的后续修改。
 二进制回退使用 receipt 中带哈希的备份及 upgrade --rollback，外部修改会被拒绝覆盖。
 
 ## 安装后处理与 tmux 配置迁移
@@ -317,3 +330,37 @@ session 的 `@tdev_config_owner` 保存规范化配置根的摘要；项目按�
 客户端统一拦截 OSC 0/1/2，并处理 tmux/screen DCS 透传包裹；有效状态协议生成本地完整标题，其他标题写入丢弃。服务端 runtime schema 2 的模板仅包含项目或 scratch 名称及按窗口合并的提醒标记；连接名称保留在客户端。现有 hook、原生未读和补充标志沿用既有清除语义。实际显示保留 `[!]`，状态标记同时提供待查看窗口数量。
 
 本机通过独立 PTY 中继以截获 tmux 对 TTY 的直接写入，转发 raw 输入和窗口大小，退出时停止输入读取、排空输出并恢复调用方终端。远端在本地过滤 OpenSSH 输出，API 附着保留原始流。过滤器跨读块解析，保留 UTF-8、非标题 OSC、普通图形 DCS 和独立 BEL；待识别字符串上限为 1 MiB，透传嵌套上限为 8 层，超限或未完成的相关缓冲丢弃。行为及兼容约束见 [终端标题](tmux-client-title.md)。
+
+## AI skill 分发
+
+`tdev` skill 源码位于 `internal/aiskill/tdev/SKILL.md`，通过 `go:embed` 随二进制进入签名与摘要覆盖范围。skill 指导 agent 使用已安装版本的 CLI 帮助、显式目标和 JSON 协议，区分客户端路由与目标机器 API，处理 revision 与部分成功结果。更新 skill 通过正常版本构建发布完成。
+
+`ai-skills` hook 追加在 tmux-runtime 和 daemon-refresh 之后，由已安装目标程序执行，沿用安装、相同内容重装、升级与回滚的锁和部分成功语义。每个 agent 目录采用独立内核锁串行同步，并通过临时文件和原子 rename 提交；内容末尾的摘要覆盖指引正文，用于识别人工编辑，摘要标记本身不承担发布来源认证。相同内容保留原 inode。skill 目录和入口符号链接视为冲突；用户配置的父目录可使用符号链接。
+
+默认检测 Codex 当前用户目录、Claude Code 和 Pi 原生目录，以 PATH 上的 agent 命令或已有配置根作为候选依据。检测阶段只读，`skill list` 和目标机器的 `api binary skills list` 返回候选。交互安装逐项显示 agent 与路径、默认拒绝；`-y` 不代替 skill 确认。无终端和 JSON 的默认 auto 模式跳过写入，显式 `--skills detected` 或 agent 名单表示授权，none 模式全部跳过。每次操作独立确认，更新现有 skill 同样适用。
+
+本机安装由前台客户端确认，将名单传给已安装程序的非交互 post-install hook；远端在已校验候选或目标程序中检测，由客户端确认后传入 API。bootstrap 在二进制安装后使用控制终端运行 skill 安装，以支持管道脚本。`skill install --agent codex-legacy` 提供旧版 Codex 目录兼容，已有旧版目录参与后续检测；`--directory` 支持其他 Agent Skills 工具的显式安装位置。
+
+用户级 skill 与项目配置根独立。CLI 测试隔离 HOME 和 agent 环境变量，SSH 测试服务为目标进程设置临时 HOME 与 agent 目录，避免触及开发者的真实 skill。
+
+## 手写项目配置与多文件存储
+
+用户格式见[项目配置](configuration.md)。顶层名称定位项目，文件只负责组织；projects 为主配置保留块。主配置存在时只加载显式 include，没有主配置时兼容 projects/*.yaml 扫描。include 不递归，同一物理文件重复引用和同名项目均报错，不按加载顺序覆盖或跨文件合并字段。已有主配置的新项目直接追加主配置，避免创建落在 include 范围外的文件。
+
+存储层将 dir、windows、ports 和 row/column 转换为现有 Project/Window/Pane/Forward 模型，机器协议及 tmux 归属标记保持原语义。窗口名称唯一；端口具名时以名称供 override 引用，匿名规则以方向和完整转发规则识别。叶 pane 名称可选，缺省按树位置生成；显式名称适合布局调整。
+
+内部身份、revision、声明摘要和完整机器模型快照存入配置根 state/projects，作用域与项目定义一致。读取旧文件保留原模型，首次更新时迁移并备份。简洁文件的手工变更在下次读取时解析，语义变化增加 revision；仅格式和注释变化更新摘要。配置移动保持名称和身份，原有 tmux 与客户端 override 继续按内部身份匹配。
+
+同一配置根的项目读写使用共享文件锁，避免两个项目同时修改多项目文件时相互覆盖。写回通过 YAML 节点树只修改发生变化的字段，保留其他项目、注释、顺序和未修改的简写；编码器可规范化缩进。保存整个源文件作为项目具名备份，外部编辑在写入前再次核对。外部编辑器不参与 flock，最终比较与 rename 之间存在很短的竞争窗口。
+
+配置源文件与内部记录分别原子提交；源文件提交后记录保存失败返回 PARTIAL_SUCCESS。具体竞争窗口和平台覆盖限制集中记录于[验收记录](acceptance.md)。
+
+## 统一客户端声明与 override
+
+config.ClientDocument 汇总主配置和客户端片段，并记录每个服务器、override 及全局设置的来源。client 为保留顶层名称；项目 API 只读取项目定义，客户端在本机合并 ports、extra_ports 和 mount.path。全局 SSH 与重连参数沿用现有字段和优先级，向导省略默认值。
+
+客户端保存持有 client/config 锁，身份绑定使用独立 client/bindings 锁，配置提交与项目读写共用 projects/store 锁。保存前核对读取的全部来源文件；新增条目进入主配置，已有条目按来源更新。首次建立主配置时显式包含默认项目片段，保留本机项目发现。修改前以内容摘要命名备份，多文件逐一提交，部分提交返回 PARTIAL_SUCCESS。
+
+新声明通过 server/project 和端口名称引用资源。首次成功合并校验后持锁绑定 UUID；绑定不同的同名项目拒绝应用，reset 删除声明与绑定。自动标识和绑定保持在 state/client-bindings.json，未绑定的声明可提前写入配置；校验失败保持未绑定。挂载单独校验身份，已有有效配置在 daemon 路径中保持原语义。
+
+旧客户端配置在没有新 client 块时读取。首次保存把全部旧设置迁入新块并将 UUID 转入内部绑定，原文件和 .legacy.bak 保留回退；新块存在后使用新配置来源。客户端配置与绑定分别提交，绑定写入失败通过 PARTIAL_SUCCESS 报告。并发与平台覆盖边界见[验收记录](acceptance.md)。

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"tdev/internal/aiskill"
 	"tdev/internal/config"
 	"tdev/internal/tmux"
 )
@@ -21,6 +22,13 @@ import (
 func TestPostInstallMigratesLiveSessionAndRetries(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux required")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, dir := range []string{".codex", ".claude", ".pi/agent"} {
+		if err := os.MkdirAll(filepath.Join(home, dir), 0700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("TMUX", "")
@@ -78,8 +86,23 @@ func TestPostInstallMigratesLiveSessionAndRetries(t *testing.T) {
 		var decoded struct {
 			PostInstall postInstallReport `json:"post_install"`
 		}
-		if json.Unmarshal(b, &decoded) != nil || decoded.PostInstall.Version != "0.5.1" || len(decoded.PostInstall.Hooks) != 2 {
+		if json.Unmarshal(b, &decoded) != nil || decoded.PostInstall.Version != "0.5.1" || len(decoded.PostInstall.Hooks) != 3 {
 			t.Fatalf("target hooks missing: %s", b)
+		}
+		skillHook := decoded.PostInstall.Hooks[2]
+		if skillHook.Name != "ai-skills" || skillHook.Status != "succeeded" {
+			t.Fatalf("skill hook failed: %+v", skillHook)
+		}
+		skillJSON, _ := json.Marshal(skillHook.Data)
+		var skills []aiskill.Result
+		if json.Unmarshal(skillJSON, &skills) != nil || len(skills) != 3 {
+			t.Fatalf("skill targets missing: %s", skillJSON)
+		}
+		for _, skill := range skills {
+			data, e := os.ReadFile(filepath.Join(skill.Directory, "SKILL.md"))
+			if e != nil || string(data) != string(aiskill.Content()) {
+				t.Fatalf("target skill not installed: %+v %v", skill, e)
+			}
 		}
 		rowsJSON, _ := json.Marshal(decoded.PostInstall.Hooks[0].Data)
 		var rows []tmux.RuntimeSession
@@ -88,7 +111,7 @@ func TestPostInstallMigratesLiveSessionAndRetries(t *testing.T) {
 		}
 	}
 	// The destination is new, but existing sessions still require migration.
-	r := executeBinary(t, installer, root, "", "", 0, "install", "--release-dir", release, "--public-key", filepath.Join(release, "release.pub"), "--destination", destination, "--completion", "none", "-y")
+	r := executeBinary(t, installer, root, "", "", 0, "install", "--release-dir", release, "--public-key", filepath.Join(release, "release.pub"), "--destination", destination, "--completion", "none", "--skills", "detected", "-y")
 	checkReport(r.Data)
 	waitAlert := func() {
 		t.Helper()
@@ -113,7 +136,7 @@ func TestPostInstallMigratesLiveSessionAndRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	stale()
-	r = executeBinary(t, destination, root, "", "", 0, "api", "binary", "install", "--release-dir", release, "--public-key", filepath.Join(release, "release.pub"), "--destination", destination)
+	r = executeBinary(t, destination, root, "", "", 0, "api", "binary", "install", "--release-dir", release, "--public-key", filepath.Join(release, "release.pub"), "--destination", destination, "--skills", "detected")
 	checkReport(r.Data)
 	after, _ := os.Stat(destination)
 	if !os.SameFile(info, after) {
@@ -130,7 +153,7 @@ func TestPostInstallMigratesLiveSessionAndRetries(t *testing.T) {
 	var details struct {
 		PostInstall postInstallReport `json:"post_install"`
 	}
-	if json.Unmarshal(b, &details) != nil || len(details.PostInstall.Hooks) != 2 || details.PostInstall.Hooks[0].Status != "failed" || details.PostInstall.Hooks[1].Status != "succeeded" {
+	if json.Unmarshal(b, &details) != nil || len(details.PostInstall.Hooks) != 3 || details.PostInstall.Hooks[0].Status != "failed" || details.PostInstall.Hooks[1].Status != "succeeded" || details.PostInstall.Hooks[2].Status != "succeeded" {
 		t.Fatalf("partial hook report: %s", b)
 	}
 	if runTmux("show-options", "-v", "-t", s.SessionID, "@tdev_runtime_config_version") != "3" {
@@ -140,7 +163,7 @@ func TestPostInstallMigratesLiveSessionAndRetries(t *testing.T) {
 	r = executeBinary(t, destination, root, "", "", 0, "post-install")
 	b, _ = json.Marshal(r.Data)
 	var retry postInstallReport
-	if json.Unmarshal(b, &retry) != nil || len(retry.Hooks) != 2 {
+	if json.Unmarshal(b, &retry) != nil || len(retry.Hooks) != 3 {
 		t.Fatalf("retry result: %s", b)
 	}
 	waitAlert()

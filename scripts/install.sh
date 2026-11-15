@@ -12,11 +12,13 @@ destination="${HOME}/.local/bin/tdev"
 config_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/tdev"
 modify_path=auto custom_destination=no default_source=no
 completion=auto
+skills=auto
 usage() {
   printf '%s\n' 'Install tdev for macOS/Linux. No sudo required.' \
     'Usage: sh install.sh [--version VERSION] [--no-modify-path | --add-path] [--shell auto|bash|zsh|fish|sh]' \
     '       [--destination PATH] [--config-dir DIR]' \
     '       [--completion auto|none|bash|zsh|all | --install-completion | --no-completion]' \
+    '       [--skills auto|none|detected]' \
     '       [--release-dir DIR | --release-url HTTPS_URL] [--public-key TRUSTED_PEM]'
 }
 while [ "$#" -gt 0 ]; do
@@ -26,20 +28,21 @@ while [ "$#" -gt 0 ]; do
     --add-path) modify_path=yes; shift ;;
     --install-completion) completion=yes; shift ;;
     --no-completion) completion=none; shift ;;
-    --release-dir|--release-url|--public-key|--version|--destination|--config-dir|--shell|--completion)
+    --release-dir|--release-url|--public-key|--version|--destination|--config-dir|--shell|--completion|--skills)
       [ "$#" -ge 2 ] || { usage >&2; exit 2; }
       case "$1" in
         --release-dir) release_dir=$2 ;; --release-url) release_url=$2 ;;
         --public-key) public_key=$2 ;; --version) version=$2 ;;
         --destination) destination=$2; custom_destination=yes ;;
         --config-dir) config_dir=$2 ;; --shell) shell=$2 ;;
-        --completion) completion=$2 ;;
+        --completion) completion=$2 ;; --skills) skills=$2 ;;
       esac
       shift 2 ;;
     *) usage >&2; exit 2 ;;
   esac
 done
 case "$completion" in auto|yes|none|bash|zsh|all) ;; *) printf '%s\n' 'Completion must be auto, none, bash, zsh or all.' >&2; exit 2 ;; esac
+case "$skills" in auto|none|detected) ;; *) printf '%s\n' 'Skills must be auto, none or detected.' >&2; exit 2 ;; esac
 case "$destination" in '~/'*) destination="$HOME/${destination#\~/}" ;; esac
 case "$release_version" in @*) packaged=no ;; *) packaged=yes ;; esac
 if [ -z "$version" ] && [ "$packaged" = yes ]; then version=$release_version; fi
@@ -118,6 +121,18 @@ fi
 # Only authenticated bytes execute; the candidate verifies the signed manifest again.
 "$stage/$asset" --config-dir "$config_dir" --json api binary install --release-dir "$stage" --public-key "$stage/release.pub" --version "$version" --destination "$destination" --source-url "$remember_url"
 printf '\nInstalled %s.\n' "$destination"
+# Machine post-install hooks skip skill writes without explicit approval.
+# Use the controlling terminal even when this script is piped into sh.
+if [ "$skills" = auto ]; then
+  if ( : </dev/tty ) 2>/dev/null; then
+    "$destination" --config-dir "$config_dir" skill install </dev/tty || exit 9
+  else
+    printf 'Configure AI skills later: "%s" skill install\n' "$destination"
+  fi
+elif [ "$skills" = detected ]; then
+  "$destination" --config-dir "$config_dir" --skills detected skill install || exit 9
+fi
+
 if [ "$modify_path" = auto ]; then
   if [ "$custom_destination" = no ]; then modify_path=yes; else modify_path=no; fi
 fi

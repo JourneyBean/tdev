@@ -295,93 +295,73 @@ HTTP 代理及其隧道由本地独立管理进程持有，使用 http 重连策
 
 ### 7.1 远端项目配置
 
-默认目录 `${XDG_CONFIG_HOME:-$HOME/.config}/tdev/projects/<project>.yaml`。配置格式带 schema_version；项目带稳定 id 和单调递增 revision。
+配置根目录为 `${XDG_CONFIG_HOME:-$HOME/.config}/tdev`，由项目所在机器管理。存在 config.yaml 时加载主配置和 projects.include 指定的文件；没有主配置时扫描 projects/*.yaml。每个文件可以声明多个项目，顶层键作为项目名，与文件名无关。
 
 ```yaml
-schema_version: 1
-revision: 1
-id: "c42ced90-50c4-4cf9-bcff-f1658484d177"
-name: demo
-directory: /home/developer/projects/demo
+projects:
+  include:
+    - ./projects/*.yaml
 
-windows:
-  - id: api
-    name: api
-    directory: .
-    command: "uv run python -m app"
-  - id: web
-    name: web
-    directory: web
-    command: "pnpm dev"
-  - id: shell
-    name: shell
-    directory: .
-
-forwards:
-  - id: web
-    direction: L
-    bind_address: "127.0.0.1"
-    listen_port: 5173
-    target_host: localhost
-    target_port: 5173
-  - id: local-service
-    direction: R
-    bind_address: "127.0.0.1"
-    listen_port: 9000
-    target_host: localhost
-    target_port: 3000
+demo:
+  dir: ~/projects/demo
+  windows:
+    - name: editor
+      command: nvim .
+    - name: web
+      dir: web
+      command: pnpm dev
+  ports:
+    - name: web
+      local: 5173
+      remote: 5173
+    - name: local-service
+      direction: remote
+      remote: 9000
+      local: 3000
 ```
 
-窗口 directory 为绝对路径或相对项目根目录的路径；项目根目录创建配置时规范化为远端绝对路径。缺少 command 表示交互 shell。command 由远端 shell 执行，项目配置应来自可信用户。
+用户声明使用 dir、windows、ports；分屏使用 row/column。窗口省略时默认 main shell。重复项目报错并指出来源；include 相对主配置解析，显式文件缺失报错，glob 空匹配允许。同一文件中项目与注释在编辑时保留。字段、路径规则和迁移说明见[项目配置](configuration.md)。
 
-第一版禁止重复 YAML key、未知字段和不支持的 schema_version，避免拼写错误被忽略；后续字段必须通过格式版本和能力协商引入。不保存完整环境变量快照，不自动读取 .env 写入配置。配置权限默认用户私有。
+UUID、revision 和机器模型 schema_version 保存在配置根的 state/projects/<项目名>.json。项目名在配置根内关联内部身份；文件移动、拆分和合并保持身份。读取手工修改时更新内部 revision，纯排版和注释保持 revision。现有机器 API definition 保留其格式；手写声明与 API 模型在存储层转换。旧项目文件首次通过 tdev 编辑时备份并转换，保留身份。
 
-### 7.2 本地配置
+目录和 command 由项目机器解析，项目配置应来自可信用户。解析拒绝未知字段、重复 key、多文档、anchor/alias 与 merge key。配置、备份和内部记录默认用户私有；仅保存显式设置。
 
-```yaml
-schema_version: 1
-servers:
-  research:
-    ssh_alias: research-host
-    remote_binary: .local/bin/tdev
-  development:
-    ssh_alias: dev-host
-    remote_binary: .local/bin/tdev
-reconnect:
-  terminal:
-    attempts: 5
-    interval: 2s
-  forward:
-    attempts: 5
-    interval: 2s
-  http:
-    attempts: always
-    interval: 5s
-```
+### 7.2 当前机器的客户端配置
 
-本地默认使用 XDG 风格目录。runtime/state 保存本机挂载和操作所有权等临时信息。进程归属通过 PID、启动标识与进程身份共同核验。
-
-本机端口偏好单独写入 `overrides.yaml`，例如：
+同一台机器可以同时提供项目和发起远端连接。顶层项目属于项目主机，client 块属于发起操作的客户端；client.include 支持单文件或拆分管理。
 
 ```yaml
-schema_version: 1
-servers:
-  development:
-    demo:
-      project_id: 22222222-2222-4222-8222-222222222222
-      forwards:
+client:
+  include:
+    - ./client.d/*.yaml
+  servers:
+    development:
+      ssh_alias: dev-host
+  overrides:
+    development/demo:
+      ports:
         api:
-          listen_port: 8080
+          local: 8080
+      mount:
+        path: ~/mnt/demo
+    local/demo:
+      ports:
+        api:
+          local: 18080
 ```
 
-向导自动记录项目 UUID 和稳定 forward ID。`ls`、`open` 每次从服务器读取最新项目，再覆盖本机监听端口；目录、窗口、命令和转发目标继续使用本次发现的值。远端移除映射或同名项目身份变化时，提示重置过期 override。保存窗口与项目使用远端原始定义。
+片段内容为 servers、overrides、ssh 和 reconnect。同名服务器或 override 目标重复定义时报错。ports 覆盖具名 local 映射的监听参数或 enabled 状态，extra_ports 添加客户端转发；mount.path 指当前客户端挂载路径。目录、窗口、命令和共享转发目标从项目定义读取。合并仅在发起连接的一侧进行，项目 API 返回原始定义。
+
+用户文件以 server/project 定位目标，首次成功合并后把 UUID 写入 state/client-bindings.json。同名目标身份变化时提示 reset；reset 同时移除目标偏好与绑定。默认远端二进制为 .local/bin/tdev；重连优先级为命令参数、服务器覆盖、全局设置和内置默认值。完整字段见[配置指南](configuration.md)。
+
+没有 client 块时兼容 client.yaml 和 overrides.yaml；首次保存迁入新块，旧文件备份保留。有 client 块时使用新声明及其 include。客户端修改保留来源文件、其他项目和注释，与项目修改共用文件锁；多文件更新失败时报告 PARTIAL_SUCCESS。
 
 ### 7.3 写入与并发
 
-- api 修改接口取得项目锁，读取并校验 expected_revision，再生成新配置。
+- api 修改接口取得项目锁和配置根共享文件锁，读取并校验 expected_revision，再生成新配置。
 - 写同目录临时文件、校验、刷新后原子 rename；revision 增加。
 - revision 不匹配返回 CONFIG_CONFLICT 和当前 revision，不默认 last-write-wins。
-- 修改前保留受限权限的上一版本备份；配置迁移也需要备份和可解释的回退。
+- 修改前检查源文件内容并保存完整源文件备份，名称包含项目名和 revision；共享文件中只更新目标项目。旧格式迁移保留原格式备份。
 - 不在持有短时配置锁期间等待交互输入或长期运行 SSH。
 - 多个字段的更新作为一个请求处理；错误不得产生半份配置。
 - save 应再次核对 session/window ID；布局在采集期间发生变化时可重试有限次数或报告冲突。

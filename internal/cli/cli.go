@@ -18,12 +18,13 @@ import (
 	"tdev/internal/tmux"
 )
 
-var Version = "0.7.0"
+var Version = "0.8.0"
 
 type app struct {
 	root         *cobra.Command
 	store        config.Store
 	json         bool
+	skillsMode   string
 	debug        bool
 	timeout      time.Duration
 	out, errOut  io.Writer
@@ -42,6 +43,9 @@ func executeContext(parent context.Context, args []string, in io.Reader, out, er
 	a := &app{store: config.Store{Root: config.DefaultRoot()}, in: in, out: out, errOut: errOut, useDaemon: true}
 	r := &cobra.Command{Use: "tdev", Short: "Project workspaces over SSH and tmux", Long: "tdev provides user commands for project workspaces over SSH and tmux.\nUse tdev api for the machine interface invoked by clients on the target host.", TraverseChildren: true, SilenceUsage: true, SilenceErrors: true}
 	r.PersistentPreRunE = func(*cobra.Command, []string) error {
+		if !validSkillsMode(a.skillsMode) {
+			return config.Invalid("invalid skills mode")
+		}
 		if a.timeout <= 0 {
 			return config.Invalid("timeout must be positive")
 		}
@@ -57,6 +61,7 @@ func executeContext(parent context.Context, args []string, in io.Reader, out, er
 	r.SetOut(out)
 	r.SetErr(errOut)
 	r.PersistentFlags().BoolVar(&a.json, "json", false, "write a protocol JSON response")
+	r.PersistentFlags().StringVar(&a.skillsMode, "skills", "auto", "AI skills: auto (ask for each detected agent), none, detected, or comma-separated agents")
 	r.PersistentFlags().BoolVar(&a.debug, "debug", false, "record successful operations and timings in private diagnostic logs")
 	r.PersistentFlags().StringVar(&a.store.Root, "config-dir", a.store.Root, "configuration root on this machine")
 	r.PersistentFlags().DurationVar(&a.timeout, "timeout", 30*time.Second, "local/control operation timeout")
@@ -69,6 +74,7 @@ func executeContext(parent context.Context, args []string, in io.Reader, out, er
 	a.psCommand()
 	a.pathCommand()
 	a.completionCommands()
+	a.skillCommands()
 	a.commandHelp()
 	r.SetArgs(args)
 	started := time.Now()
@@ -170,6 +176,9 @@ func (a *app) api() {
 	l := group(a.root, "api", "Client/server machine interface on the target host")
 	l.Long = "Machine interface invoked by tdev clients over SSH or on this host.\nOperations use explicit arguments and structured stdin, without confirmation prompts.\nUse --json for protocol responses. These commands operate on this host.\nThe session attach transport requires a terminal and explicit attachment identity."
 	l.PersistentPreRunE = func(*cobra.Command, []string) error {
+		if !validSkillsMode(a.skillsMode) {
+			return config.Invalid("invalid skills mode")
+		}
 		if a.timeout <= 0 {
 			return config.Invalid("timeout must be positive")
 		}

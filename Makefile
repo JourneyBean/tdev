@@ -1,6 +1,14 @@
 GO ?= go
-VERSION ?= 0.7.0
-LDFLAGS = -X tdev/internal/cli.Version=$(VERSION)
+VERSION ?= 0.8.0
+ifneq ($(filter release,$(MAKECMDGOALS)),)
+BUILD_VERSION := $(VERSION)
+else
+BUILD_VERSION := $(shell sh scripts/build-version.sh '$(VERSION)')
+ifeq ($(BUILD_VERSION),)
+$(error Could not determine build version)
+endif
+endif
+LDFLAGS = -X tdev/internal/cli.Version=$(BUILD_VERSION)
 
 .PHONY: build test check cross release
 build:
@@ -15,6 +23,8 @@ check:
 	git diff --check
 	sh -n scripts/install.sh
 	sh -n scripts/gitlab-build.sh
+	sh -n scripts/build-version.sh
+	sh scripts/test-build-version.sh
 
 cross:
 	@mkdir -p dist

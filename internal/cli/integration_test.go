@@ -23,6 +23,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 	"go.yaml.in/yaml/v3"
+	"tdev/internal/aiskill"
 	"tdev/internal/config"
 	"tdev/internal/daemon"
 	"tdev/internal/protocol"
@@ -440,10 +441,21 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 		if err = os.Mkdir(bootstrapHome, 0700); err != nil {
 			t.Fatal(err)
 		}
-		bootstrap := exec.Command("sh", filepath.Join(v1, "install.sh"), "--release-dir", v1, "--shell", "bash", "--completion", "all", "--config-dir", filepath.Join(bootstrapHome, "config"))
+		for _, dir := range []string{".codex", ".claude", ".pi/agent"} {
+			if err = os.MkdirAll(filepath.Join(bootstrapHome, dir), 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		bootstrap := exec.Command("sh", filepath.Join(v1, "install.sh"), "--release-dir", v1, "--shell", "bash", "--completion", "all", "--skills", "detected", "--config-dir", filepath.Join(bootstrapHome, "config"))
 		bootstrap.Env = append(os.Environ(), "HOME="+bootstrapHome, "ZDOTDIR="+bootstrapHome, "OPENSSL=/nonexistent/openssl")
 		if output, err := bootstrap.CombinedOutput(); err != nil {
 			t.Fatalf("pinned bootstrap without OpenSSL failed: %v %s", err, output)
+		}
+		for _, dir := range []string{".agents", ".claude", ".pi/agent"} {
+			data, e := os.ReadFile(filepath.Join(bootstrapHome, dir, "skills/tdev/SKILL.md"))
+			if e != nil || !bytes.Equal(data, aiskill.Content()) {
+				t.Fatalf("bootstrap skill %s: %v", dir, e)
+			}
 		}
 		installed := filepath.Join(bootstrapHome, ".local/bin/tdev")
 		for _, name := range []string{".bashrc", ".profile", ".zshrc"} {
@@ -455,7 +467,7 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 		t.Run("pipe_installer_completion_prompt", func(t *testing.T) {
 			for _, answer := range []string{"y", "n"} {
 				home := t.TempDir()
-				cmd := exec.Command("sh", "-c", `script=$1; shift; cat "$script" | sh -s -- "$@"`, "sh", filepath.Join(v1, "install.sh"), "--release-dir", v1, "--shell", "zsh", "--config-dir", filepath.Join(home, "config"))
+				cmd := exec.Command("sh", "-c", `script=$1; shift; cat "$script" | sh -s -- "$@"`, "sh", filepath.Join(v1, "install.sh"), "--release-dir", v1, "--shell", "zsh", "--skills", "none", "--config-dir", filepath.Join(home, "config"))
 				cmd.Env = append(os.Environ(), "HOME="+home, "ZDOTDIR="+home, "TERM=xterm-256color")
 				installer := terminalCommand(t, cmd)
 				installer.waitText(t, "Configure zsh command completion?")
@@ -467,10 +479,35 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 				}
 			}
 		})
+		t.Run("pipe_installer_skill_prompt", func(t *testing.T) {
+			home := t.TempDir()
+			for _, dir := range []string{".codex", ".claude", ".pi/agent"} {
+				if e := os.MkdirAll(filepath.Join(home, dir), 0700); e != nil {
+					t.Fatal(e)
+				}
+			}
+			cmd := exec.Command("sh", "-c", `script=$1; shift; cat "$script" | sh -s -- "$@"`, "sh", filepath.Join(v1, "install.sh"), "--release-dir", v1, "--no-modify-path", "--no-completion", "--config-dir", filepath.Join(home, "config"))
+			cmd.Env = append(os.Environ(), "HOME="+home, "TERM=xterm-256color")
+			installer := terminalCommand(t, cmd)
+			for _, item := range []struct{ agent, answer string }{{"codex", "n"}, {"cc", "y"}, {"pi", "n"}} {
+				installer.waitText(t, "Install or update tdev skill for "+item.agent+" at")
+				installer.write(t, item.answer+"\r")
+			}
+			installer.exit(t, 0)
+			data, e := os.ReadFile(filepath.Join(home, ".claude/skills/tdev/SKILL.md"))
+			if e != nil || !bytes.Equal(data, aiskill.Content()) {
+				t.Fatalf("approved skill: %v", e)
+			}
+			for _, dir := range []string{".agents", ".pi/agent"} {
+				if _, e := os.Stat(filepath.Join(home, dir, "skills/tdev")); !os.IsNotExist(e) {
+					t.Fatalf("declined skill: %s %v", dir, e)
+				}
+			}
+		})
 		t.Run("binary_install_completion", func(t *testing.T) {
 			for _, mode := range []string{"all", "auto"} {
 				home := t.TempDir()
-				args := []string{"--config-dir", filepath.Join(home, "config"), "install", "--release-dir", v1, "--public-key", filepath.Join(v1, "release.pub"), "--destination", filepath.Join(home, ".local/bin/tdev"), "--completion", mode}
+				args := []string{"--config-dir", filepath.Join(home, "config"), "install", "--release-dir", v1, "--public-key", filepath.Join(v1, "release.pub"), "--destination", filepath.Join(home, ".local/bin/tdev"), "--completion", mode, "--skills", "none"}
 				cmd := exec.Command(binary, args...)
 				cmd.Env = append(os.Environ(), "HOME="+home, "ZDOTDIR="+home, "SHELL=/bin/zsh", "TERM=xterm-256color")
 				if mode == "auto" {

@@ -4,10 +4,10 @@
 选择已有连接或填写服务器地址，读取目标设备的项目配置，随后打开项目继续开发。
 复用系统 OpenSSH 和 tmux，远端无需数据库、HTTP API 或常驻 tdev 服务。
 
-当前源码版本为 `0.7.0`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
+当前源码版本为 `0.8.0`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
 挂载、本地连接 daemon、功能选择、签名安装升级和回滚。设计基线见[产品与技术设计](docs/design.md)，实现取舍见
 [开发记录](docs/development.md)，实际通过与尚未实测的场景见[第一版验收记录](docs/acceptance.md)。
-版本变更见[发布说明](docs/releases/v0.7.0.md)。二进制 Release 位于
+版本变更见[v0.8.0 发布说明](docs/releases/v0.8.0.md)。二进制 Release 位于
 [GitHub](https://github.com/JourneyBean/tdev/releases)。
 
 ## 安装
@@ -23,6 +23,19 @@ curl -fsSL https://github.com/JourneyBean/tdev/releases/latest/download/install.
 [四平台二进制下载、手动安装和签名校验](docs/installation.md)
 
 安装、升级和回滚会调用目标版本的 post-install hooks，迁移当前配置的运行中 tmux 会话，并按需刷新运行中的 daemon。相同内容重装也会补跑；失败返回部分成功，保留安装结果。可用 `tdev post-install` 重试，远端使用 `tdev post-install --remote dev`。旧客户端首次升级后需手动补跑一次。详见[安装后处理](docs/installation.md#安装后处理)。
+
+## AI skill
+
+安装或升级时检测 Codex、Claude Code（cc）和 Pi，逐项询问是否安装或更新 `tdev` skill。检测依据为 agent 命令或已有配置目录；默认不安装，无终端时跳过。skill 随二进制发布，保留用户修改并报告冲突。
+
+```sh
+tdev skill install                   # 检测并逐项确认安装
+tdev skill install --agent cc        # 仅安装 Claude Code
+tdev skill show                      # 查看内置指引
+tdev --skills detected skill install # 显式授权安装检测到的 skill
+```
+
+默认目录、旧版 Codex 与其他兼容 agent 的安装方式见[安装文档](docs/installation.md#ai-skill)。
 
 ## Shell 命令补全
 
@@ -108,7 +121,7 @@ create 和 edit 复用逐项向导，edit 预填已有值：项目目录、启�
 
 添加映射时选择 L/R，直接输入 `localhost:8000`、`service.internal:3000` 或 `[::1]:8000`。监听端口默认取服务端口。远端 L 映射的默认监听端口保存在项目定义，当前客户端的端口调整单独保存为 override。可连续添加或跳过。项目转发的增、删、改统一使用 `edit`；保存后通过 `open` 或 `open --only forward` 建立监听。
 
-配置修改检查 revision 并保留备份。完整替换使用 `edit --stdin --expected-revision N`，输入为 show 的 `definition` 对象。show 同时展示原始定义、override 与最终生效配置。窗口启动命令在新建会话时执行。
+项目文件使用具名项目、`dir`、`windows` 和 `ports` 的简洁 YAML，支持单文件及 include 拆分，见[项目配置](docs/configuration.md)。UUID 与 revision 保存在独立内部记录。通过 CLI 修改会检查 revision 并备份源文件。机器接口完整替换使用 `edit --stdin --expected-revision N`，输入为 show 的 `definition` 对象。show 同时展示原始定义、override 与最终生效配置。窗口启动命令在新建会话时执行。
 
 ## 会话和窗口
 
@@ -147,24 +160,24 @@ open 遇到项目不存在时，确认后进入创建向导，保存后继续打
 
 在项目的 tmux 窗口中手动分屏后运行 `tdev save`，即可保存布局。新建会话时恢复分屏方向、嵌套结构、比例和各 pane 的目录。已声明的 pane 启动命令继续保留，手动新增 pane 保存为空 shell。
 
-也可通过 `tdev edit <项目> --stdin --expected-revision N` 设置窗口的 `layout`；完整输入使用 `tdev show` 返回的 `definition`。例如窗口定义：
+手写项目配置也可以声明分屏：
 
 ```yaml
-id: web
-name: web
-directory: .
-layout:
-  split: vertical
-  panes:
-    - id: frontend
-      directory: frontend
-      command: npm run dev
-    - id: backend
-      directory: backend
-      command: uv run server.py
+demo:
+  dir: ~/projects/demo
+  windows:
+    - name: web
+      layout:
+        column:
+          - name: frontend
+            dir: frontend
+            command: npm run dev
+          - name: backend
+            dir: backend
+            command: uv run server.py
 ```
 
-`horizontal` 表示左右排列，`vertical` 表示上下排列；子节点可以继续分屏。叶节点的 `id` 在窗口内唯一，目录相对项目根目录解析，`weight` 可指定同级空间比例。单 pane 窗口继续使用原来的 `directory` 和 `command` 字段。
+`row` 表示左右排列，`column` 表示上下排列；支持嵌套和同级空间比例 `weight`。省略 pane 名称时自动生成内部标识，目录相对项目根目录解析。完整格式见[项目配置](docs/configuration.md)。机器 API 的 layout 继续使用 split/panes；`edit --stdin` 接收 show 的 definition 对象。
 
 使用分屏配置时，项目所在机器及编辑配置的客户端需支持 `pane-layout-v1`；远端写入会检查该能力。布局按可用单元格近似恢复。已有会话继续运行原布局，新建会话使用保存的配置。
 
@@ -193,8 +206,13 @@ make cross
 ```
 
 构建生成 `bin/tdev`；跨平台二进制位于 `dist/`。这些是未签名开发产物。
+`make build` 和 `make cross` 自动生成形如 `0.8.0-git.1a2b3c4d5e6f` 的版本，
+有已跟踪文件改动或未忽略的新文件时追加 `.dirty`。匹配基础版本的 `v0.8.0` tag
+且工作树干净时使用 `0.8.0`；缺少 Git 提交信息时使用 `0.8.0-dev.unknown`。
+一次构建的四平台产物使用同一版本；`make release` 使用 `VERSION` 指定的正式版本。
+可运行 `./bin/tdev version` 查看版本，构建产物按需手动复制到目标机器。
 默认配置目录为 `${XDG_CONFIG_HOME:-$HOME/.config}/tdev`；`--config-dir` 可指定
-本机隔离目录。配置和历史版本备份使用 0600 权限。
+本机隔离目录。有 `config.yaml` 时读取主配置及其 include，否则读取 `projects/*.yaml`。每个文件可声明多个具名项目；配置和历史版本备份使用 0600 权限。详见[项目配置](docs/configuration.md)。
 
 ## 机器接口
 
@@ -253,19 +271,20 @@ tdev stop demo -y
 `--reconnect-attempts` 支持 `0`、非负整数和 `always`；数值是初次连接之外的重试次数。
 等待和连接期间 Ctrl-C 退出；已连接时键盘 Ctrl-C 仍交给远端应用。
 
-本地 `client.yaml` 支持全局 reconnect/SSH 偏好，以及每台服务器的 reconnect 覆盖。
+主配置的 `client` 块支持连接、override 和全局 reconnect/SSH 偏好；`client.include` 可拆分文件。旧客户端配置在首次保存时备份迁移，完整格式见[配置指南](docs/configuration.md)。支持每台服务器的 reconnect 覆盖。
 优先级为命令参数、服务器覆盖、全局设置。setup 也提供
 `--terminal-reconnect-attempts`、`--terminal-reconnect-interval` 及对应 forward 参数。
 
 ```yaml
-reconnect:
-  terminal: {attempts: 5, interval: 2s}
-  forward: {attempts: 5, interval: 2s}
-  http: {attempts: always, interval: 5s} # 为后续 HTTP 功能保留
-ssh:
-  connect_timeout: 10s
-  server_alive_interval: 15s
-  server_alive_count_max: 3
+client:
+  reconnect:
+    terminal: {attempts: 5, interval: 2s}
+    forward: {attempts: 5, interval: 2s}
+    http: {attempts: always, interval: 5s} # 为后续 HTTP 功能保留
+  ssh:
+    connect_timeout: 10s
+    server_alive_interval: 15s
+    server_alive_count_max: 3
 ```
 
 项目标识仍使用设计中的 ASCII slug；目录、窗口显示名、命令和文件名支持 UTF-8/CJK。
@@ -274,7 +293,7 @@ ssh:
 
 ## 转发
 
-`ls`、`open` 每次读取远端最新配置，再合并本机 `overrides.yaml`。调整本机端口可在向导中完成，也可以使用：
+`ls`、`open` 每次读取远端最新配置，再合并本机 `client.overrides`。调整本机端口可在向导中完成，也可以使用：
 
 ```sh
 tdev override demo                       # 查看远端与合并后的配置
@@ -282,7 +301,7 @@ tdev override demo --forward api --local-port 8080
 tdev override demo --reset               # 恢复远端默认值
 ```
 
-`api` 是远端映射的稳定 ID，可从 `tdev show` 查看。项目目录、窗口和命令实时读取，本机只保存端口差异及附加转发。
+`api` 可由项目文件中端口的 `name` 指定，也是机器定义中的稳定 ID，可从 `tdev show` 查看。项目目录、窗口和命令实时读取，本机只保存端口差异及附加转发。
 
 ```sh
 tdev forward dev -L 3000:localhost:8000          # 等监听就绪后返回，后台保留

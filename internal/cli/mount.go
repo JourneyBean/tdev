@@ -47,6 +47,16 @@ func (a *app) mountCommands() {
 	})
 }
 func (a *app) mountProject(ctx context.Context, t target, p config.Project, path string) (any, error) {
+	o := t.Server.Projects[p.Name]
+	if o.Declared {
+		bound, err := a.bindOverride(t, p, o)
+		if err != nil {
+			return nil, err
+		}
+		t.Server.Projects[p.Name] = bound
+	} else if o.ProjectID != "" && o.ProjectID != p.ID {
+		return nil, config.Invalid("project identity changed; reset local overrides first")
+	}
 	if t.Local {
 		return map[string]string{"status": "local", "directory": p.Directory}, nil
 	}

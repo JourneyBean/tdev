@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -68,51 +69,6 @@ func (s Store) Lock(ctx context.Context, name, kind string) (func(), error) {
 		}
 	}
 }
-func (s Store) Get(name string) (Project, error) {
-	var p Project
-	path, err := s.path(name)
-	if err != nil {
-		return p, err
-	}
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return p, protocol.Fail("PROJECT_NOT_FOUND", 3, "project %q does not exist", name)
-	}
-	if err != nil {
-		return p, err
-	}
-	if err = Decode(b, &p); err != nil {
-		return p, err
-	}
-	if err = p.Validate(); err != nil {
-		return p, err
-	}
-	if p.Name != name {
-		return p, Invalid("project name does not match filename")
-	}
-	return p, nil
-}
-func (s Store) List() ([]Project, error) {
-	entries, err := os.ReadDir(filepath.Join(s.Root, "projects"))
-	if errors.Is(err, os.ErrNotExist) {
-		return []Project{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	out := []Project{}
-	for _, e := range entries {
-		if filepath.Ext(e.Name()) != ".yaml" {
-			continue
-		}
-		p, err := s.Get(e.Name()[:len(e.Name())-5])
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, nil
-}
 func AtomicWrite(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
@@ -164,6 +120,9 @@ func (s Store) CreateDefinition(ctx context.Context, p Project) (Project, error)
 	if err = p.Validate(); err != nil {
 		return p, err
 	}
+	if _, err := declare(p).project(name, p); err != nil {
+		return p, err
+	}
 	info, err := os.Stat(p.Directory)
 	if err != nil || !info.IsDir() {
 		return p, Invalid("directory does not exist: %s", p.Directory)
@@ -173,21 +132,98 @@ func (s Store) CreateDefinition(ctx context.Context, p Project) (Project, error)
 		return p, err
 	}
 	defer unlock()
-	path, _ := s.path(name)
-	if _, err = os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		if err != nil {
-			return p, err
-		}
-		return p, protocol.Fail("CONFIG_CONFLICT", 4, "project already exists")
-	}
-	b, err := yaml.Marshal(p)
+	unlockStore, err := s.Lock(ctx, "projects", "store")
 	if err != nil {
 		return p, err
 	}
-	return p, AtomicWrite(path, b, 0600)
+	defer unlockStore()
+	if reservedName(name) {
+		return p, Invalid("project name is reserved")
+	}
+	sources, err := s.sources()
+	if err != nil {
+		return p, err
+	}
+	if _, exists := sources[name]; exists {
+		return p, protocol.Fail("CONFIG_CONFLICT", 4, "project already exists")
+	}
+	path := filepath.Join(s.Root, "config.yaml")
+	var f *sourceFile
+	if _, err := os.Stat(path); err == nil {
+		f, err = parseFile(path)
+		if err != nil {
+			return p, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return p, err
+	} else {
+		path, _ = s.path(name)
+		if _, err := os.Stat(path); err == nil {
+			f, err = parseFile(path)
+			if err != nil {
+				return p, err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return p, err
+		}
+	}
+	if f == nil {
+		f = &sourceFile{path: path, doc: &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}}
+	}
+	if f.legacy || isLegacy(f.doc.Content[0]) {
+		return p, protocol.Fail("CONFIG_CONFLICT", 4, "destination contains a legacy project; move it to another file first")
+	}
+	if f.data != nil {
+		canonical, err := filepath.EvalSymlinks(f.path)
+		if err != nil {
+			return p, err
+		}
+		f.path = canonical
+	}
+	node := encodeNode(declare(p))
+	f.doc.Content[0].Content = append(f.doc.Content[0].Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}, node)
+	b, err := encodeDocument(f.doc)
+	if err != nil {
+		return p, err
+	}
+	if err := checkSource(f); err != nil {
+		return p, err
+	}
+	if f.data != nil {
+		backup := fmt.Sprintf("%s.%s.rev-0.bak", f.path, name)
+		if _, err := os.Lstat(backup); !errors.Is(err, os.ErrNotExist) {
+			return p, protocol.Fail("CONFIG_CONFLICT", 4, "backup already exists or cannot be inspected: %s", backup)
+		}
+		if err := AtomicWrite(backup, f.data, 0600); err != nil {
+			return p, err
+		}
+		if err := checkSource(f); err != nil {
+			return p, err
+		}
+	}
+	if err := AtomicWrite(f.path, b, 0600); err != nil {
+		return p, err
+	}
+	return p, s.commitRecord(projectSource{file: f, node: node, name: name}, p)
+}
+func checkSource(f *sourceFile) error {
+	current, err := os.ReadFile(f.path)
+	if f.data == nil && errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(current, f.data) {
+		return protocol.Fail("CONFIG_CONFLICT", 4, "configuration file changed during update: %s", f.path)
+	}
+	return nil
 }
 func (s Store) Update(ctx context.Context, name string, expected int, fn func(*Project) error) (Project, error) {
 	var p Project
+	if !ValidName(name) || reservedName(name) {
+		return p, Invalid("invalid or reserved project name %q", name)
+	}
 	if expected < 0 {
 		return p, Invalid("expected revision must be nonnegative")
 	}
@@ -196,39 +232,89 @@ func (s Store) Update(ctx context.Context, name string, expected int, fn func(*P
 		return p, err
 	}
 	defer unlock()
-	p, err = s.Get(name)
+	unlockStore, err := s.Lock(ctx, "projects", "store")
+	if err != nil {
+		return p, err
+	}
+	defer unlockStore()
+	sources, err := s.sources()
+	if err != nil {
+		return p, err
+	}
+	src, ok := sources[name]
+	if !ok {
+		return p, protocol.Fail("PROJECT_NOT_FOUND", 3, "project %q does not exist", name)
+	}
+	p, err = s.resolve(src)
 	if err != nil {
 		return p, err
 	}
 	if expected > 0 && p.Revision != expected {
 		return p, &protocol.Error{Code: "CONFIG_CONFLICT", Exit: 4, Message: "project configuration changed", Details: map[string]int{"expected_revision": expected, "actual_revision": p.Revision}}
 	}
-	old := p
-	oldBytes, err := yaml.Marshal(p)
-	if err != nil {
+	oldID, oldRevision := p.ID, p.Revision
+	before := encodeNode(declare(p))
+	if err := fn(&p); err != nil {
 		return p, err
 	}
-	if err = fn(&p); err != nil {
-		return p, err
-	}
-	if p.ID != old.ID || p.Name != old.Name {
+	if p.ID != oldID || p.Name != name {
 		return p, Invalid("project identity cannot be changed")
 	}
-	p.Revision = old.Revision + 1
-	if err = p.Validate(); err != nil {
+	p.Revision = oldRevision + 1
+	if err := p.Validate(); err != nil {
 		return p, err
 	}
-	b, err := yaml.Marshal(p)
+	// The authored representation requires unique display names as well as API IDs.
+	if _, err := declare(p).project(name, p); err != nil {
+		return p, err
+	}
+	next := encodeNode(declare(p))
+	f := src.file
+	if f.legacy {
+		root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", HeadComment: f.doc.Content[0].HeadComment}
+		root.Content = []*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}, next}
+		f.doc.Content[0] = root
+	} else {
+		root := f.doc.Content[0]
+		for i := 0; i < len(root.Content); i += 2 {
+			if root.Content[i].Value == name {
+				next = patchNode(root.Content[i+1], before, next)
+				root.Content[i+1] = next
+				break
+			}
+		}
+	}
+	b, err := encodeDocument(f.doc)
 	if err != nil {
 		return p, err
 	}
-	path, _ := s.path(name)
-	backup := fmt.Sprintf("%s.rev-%d.bak", path, old.Revision)
-	if _, err = os.Lstat(backup); !errors.Is(err, os.ErrNotExist) {
-		return p, protocol.Fail("CONFIG_CONFLICT", 4, "backup already exists or cannot be inspected: %s", backup)
-	}
-	if err = AtomicWrite(backup, oldBytes, 0600); err != nil {
+	if err := checkSource(f); err != nil {
 		return p, err
 	}
-	return p, AtomicWrite(path, b, 0600)
+	backup := fmt.Sprintf("%s.rev-%d.bak", f.path, oldRevision)
+	// Different projects in a shared file may have the same revision.
+	if !f.legacy {
+		backup = fmt.Sprintf("%s.%s.rev-%d.bak", f.path, name, oldRevision)
+	}
+	if _, err := os.Lstat(backup); !errors.Is(err, os.ErrNotExist) {
+		return p, protocol.Fail("CONFIG_CONFLICT", 4, "backup already exists or cannot be inspected: %s", backup)
+	}
+	if err := AtomicWrite(backup, f.data, 0600); err != nil {
+		return p, err
+	}
+	if err := checkSource(f); err != nil {
+		return p, err
+	}
+	if err := AtomicWrite(f.path, b, 0600); err != nil {
+		return p, err
+	}
+	return p, s.commitRecord(projectSource{file: f, node: next, name: name}, p)
+}
+
+// The source has already committed when this helper is called.
+func (s Store) commitRecord(src projectSource, p Project) error {
+	if err := s.saveRecord(src, p); err != nil {
+		return protocol.Fail("PARTIAL_SUCCESS", 9, "configuration saved but internal project record could not be saved: %v", err)
+	}
+	return nil
 }

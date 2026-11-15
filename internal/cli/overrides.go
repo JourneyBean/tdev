@@ -3,11 +3,9 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"go.yaml.in/yaml/v3"
 	"tdev/internal/config"
 	"tdev/internal/tmux"
 )
@@ -18,6 +16,7 @@ type forwardOverride struct {
 	Disabled    bool    `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 type projectOverride struct {
+	Declared      bool                       `yaml:"-" json:"-"`
 	ProjectID     string                     `yaml:"project_id" json:"project_id"`
 	Forwards      map[string]forwardOverride `yaml:"forwards,omitempty" json:"forwards,omitempty"`
 	MountPath     string                     `yaml:"mount_path,omitempty" json:"mount_path,omitempty"`
@@ -30,55 +29,27 @@ type clientOverrides struct {
 }
 
 func (a *app) readOverrides() (clientOverrides, error) {
-	data := clientOverrides{SchemaVersion: 1, Servers: map[string]map[string]projectOverride{}}
-	b, err := os.ReadFile(filepath.Join(a.store.Root, "overrides.yaml"))
-	if os.IsNotExist(err) {
-		return data, nil
-	}
-	if err != nil {
-		return data, err
-	}
-	if err = config.Decode(b, &data); err != nil {
-		return data, err
-	}
-	if data.SchemaVersion != 1 {
-		return data, config.Invalid("unsupported client override schema")
-	}
-	for name, projects := range data.Servers {
-		if !config.ValidName(name) {
-			return data, config.Invalid("invalid override server name")
-		}
-		for project, override := range projects {
-			if !config.ValidName(project) || override.ProjectID == "" {
-				return data, config.Invalid("invalid project override identity")
-			}
-		}
-	}
-	if data.Servers == nil {
-		data.Servers = map[string]map[string]projectOverride{}
-	}
-	return data, nil
+	state, err := a.readClientState()
+	return state.overrides, err
 }
 
-// Caller holds the client/config lock; unrelated servers and old client.yaml stay intact.
+// Caller holds client/config. New declarations are written to their original files.
 func (a *app) writeOverrides(name string, projects map[string]projectOverride) error {
-	data, err := a.readOverrides()
+	state, err := a.readClientState()
 	if err != nil {
 		return err
+	}
+	updated := state.overrides
+	updated.Servers = map[string]map[string]projectOverride{}
+	for server, entries := range state.overrides.Servers {
+		updated.Servers[server] = entries
 	}
 	if len(projects) == 0 {
-		if _, exists := data.Servers[name]; !exists {
-			return nil
-		}
-		delete(data.Servers, name)
+		delete(updated.Servers, name)
 	} else {
-		data.Servers[name] = projects
+		updated.Servers[name] = projects
 	}
-	b, err := yaml.Marshal(data)
-	if err != nil {
-		return err
-	}
-	return config.AtomicWrite(filepath.Join(a.store.Root, "overrides.yaml"), b, 0600)
+	return a.writeClientState(context.Background(), state, state.prefs, updated)
 }
 
 type discoveredProject struct {
@@ -89,10 +60,10 @@ type discoveredProject struct {
 }
 
 func mergeProject(remote config.Project, override projectOverride) (config.Project, error) {
-	if override.ProjectID == "" && len(override.Forwards) == 0 && len(override.LocalForwards) == 0 && override.MountPath == "" {
+	if override.ProjectID == "" && len(override.Forwards) == 0 && len(override.LocalForwards) == 0 && override.MountPath == "" && !override.Declared {
 		return remote, nil
 	}
-	if override.ProjectID != remote.ID {
+	if override.ProjectID != remote.ID && !(override.Declared && override.ProjectID == "") {
 		return remote, config.Invalid("local overrides refer to an older project identity; use tdev override <project> --reset")
 	}
 	effective := remote
@@ -143,7 +114,14 @@ func mergeProject(remote config.Project, override projectOverride) (config.Proje
 }
 
 func (a *app) effective(t target, remote config.Project) (config.Project, error) {
-	return mergeProject(remote, t.Server.Projects[remote.Name])
+	o, err := a.bindOverride(t, remote, t.Server.Projects[remote.Name])
+	if err != nil {
+		return remote, err
+	}
+	if t.Server.Projects != nil {
+		t.Server.Projects[remote.Name] = o
+	}
+	return mergeProject(remote, o)
 }
 
 func decodeProjectDefinitions(data []byte) ([]discoveredProject, error) {
@@ -213,6 +191,9 @@ func (a *app) saveOverride(ctx context.Context, t target, remote config.Project,
 	o := s.Projects[remote.Name]
 	if err = edit(&o); err != nil {
 		return err
+	}
+	if o.Declared && o.ProjectID == "" {
+		o.ProjectID = remote.ID
 	}
 	if o.ProjectID == "" {
 		delete(s.Projects, remote.Name)

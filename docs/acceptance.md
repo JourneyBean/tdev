@@ -1,8 +1,79 @@
 # 开发验收记录
 
-Last verified: 2026-11-13。源码版本：0.7.0。下表保留集成验收使用的开发版版本号。
+Last verified: 2026-11-15。源码基础版本：0.8.0。下表保留集成验收使用的开发版版本号。
 
 本记录汇总第一版核心功能的自动化验证、环境实测和待验证项。
+
+## 0.8.0 开发构建与历史配置迁移（2026-11-15）
+
+源码默认值、Makefile 和 README 基础版本统一为 0.8.0；四平台开发构建及静态检查通过。
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，
+CLI 227.052 秒、真实隔离 tmux 13.464 秒。
+
+使用真实 0.7.0 安装的配置副本，在 Linux amd64 和 macOS arm64 上运行开发二进制，
+隔离 tmux socket 并关闭 skill 写入。兼容读取保持项目模型一致；post-install 保持原 YAML
+字节不变。首次 project set 自动转换 12 份旧项目配置，UUID、窗口、pane、布局、命令和
+端口模型保持一致，revision 各增加一次。本机首次 setup 将旧客户端配置迁入 config.yaml，
+两个服务器及全局 SSH/重连设置保留，legacy 备份与原文件一致。
+
+随后实际双端替换与迁移成功，实际客户端声明与已测试副本一致；新 daemon 摘要匹配
+已安装程序，原有五条转发恢复 ready。远端所有 tmux pane ID、PID 与 session ID
+在升级前后完全一致，两个既有远端服务器的项目查询成功。
+
+迁移语义为兼容读取、首次保存转换；post-install 负责 tmux/daemon 更新，配置文件的
+完整格式转换需通过保存触发。未测试 macOS amd64 原生运行及本次配置迁移的反向回滚。
+
+## 开发构建版本验收（2026-11-15）
+
+`make check` 通过，新增隔离 Git 仓库测试覆盖无仓库、无提交、干净提交、匹配正式 tag、
+暂存及未暂存修改、未忽略的新文件和忽略的 bin/dist 产物。
+`make build cross` 通过，实际 Linux CLI 与四平台二进制均包含
+`0.7.0-git.dc7f5122f013.dirty`。`make -n release VERSION=0.7.0` 确认 cross
+与签名 manifest 继续使用 `0.7.0`；本轮未执行签名发布。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，
+CLI 225.008 秒、真实隔离 tmux 13.758 秒；环境为 Linux amd64、Go 1.27.3。
+macOS/arm64 与 amd64 完成交叉构建，尚未进行原生运行或双端手动替换验证。
+
+## 统一客户端配置与 override 验收（2026-11-15）
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s -json ./...` 最终通过，含子测试 371 项通过，fish 因缺少解释器跳过。CLI 集成 221.375 秒，真实隔离 tmux 13.879 秒，配置专项 1.971 秒；Linux amd64、Go 1.27.3、tmux 3.6，使用临时 HOME/配置根、临时 SSH 身份和私有 tmux socket。`make check`、四平台 `make cross` 和本机 `make build` 通过。新增客户端源码、测试和指南的敏感信息模式扫描无命中，文档本地链接检查通过。
+
+客户端专项覆盖单文件同时声明本机项目、远端服务器及 local/remote override；端口监听覆盖、关闭规则、附加转发与挂载目录展开。验证主机 API 返回原始定义，客户端合并保持共享项目不变。client.include 覆盖片段写回和注释保持、未知字段、非法目标或端口、自包含、文件缺失、重复服务器和递归 include 拒绝。项目与客户端并发编辑同一主配置时，保留修改或返回明确冲突。
+
+身份测试验证首次成功合并后写入私有绑定，其他目标保持未绑定；同名项目 UUID 变化拒绝旧偏好。reset 同时清除声明和绑定，失败的合并保持未绑定。未绑定标记在连接和 override 的深复制中保留；项目编辑删除端口后，清理对应监听偏好并保留挂载设置。
+
+迁移测试保留旧服务器、override 和项目 UUID，以 .legacy.bak 保存原始文件，向主配置迁入声明并保持默认项目发现。新文件中没有项目 UUID。已有 client 块时使用新配置来源，向导写回条目所在文件，省略默认参数。
+
+真实隔离 SSH/TCP 验证手写 client.include、重新运行 setup 保留未绑定偏好、远端主机自身的 local override 不进入项目 API，以及客户端覆盖端口上的双向数据收发。override 修改写回片段并保留注释。既有真实 SSH/PTY 向导、转发、tmux、安装与回滚测试继续覆盖统一写回路径。
+
+覆盖限制：macOS 仅交叉构建；新挂载配置的路径展开和身份保护完成自动验证，真实 SSHFS/macFUSE 挂载沿用既有待验收项。多文件源配置与内部身份绑定分别原子提交，部分失败返回 PARTIAL_SUCCESS；突然断电的恢复尚未注入验证。外部编辑器未参与 tdev 文件锁，最终内容比较与替换之间的竞争窗口沿用项目配置限制。
+
+## 手写项目配置与多文件验收（2026-11-15）
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s -json ./...` 通过，含子测试 352 项通过，fish 因缺少解释器跳过。CLI 集成 219.125 秒，真实隔离 tmux 14.691 秒，配置专项 1.742 秒。随后补充的显式 localhost/IPv6、自动身份隐藏与 include 符号链接三个专项通过 `go test -race ./internal/config`；最终配置专项 1.696 秒。
+
+覆盖主配置单文件、多项目片段、默认目录扫描、相对 include、空 glob、缺失文件、重复包含、自包含、嵌套 include 拒绝，以及重复项目的双来源诊断。严格解析覆盖重复 key、未知字段、内部字段误写、多文档、YAML 别名、非法目录、端口和分屏。损坏的默认 projects 目录返回配置错误，post-install 故障注入回归通过。
+
+写回测试覆盖共享文件中其他项目、注释、简写和顺序保持；12 个相同 revision 更新仅一个成功；不同项目并发编辑同一文件均保留修改。手工变更递增 revision，纯注释保持身份与 revision，过期写入和回调期间的外部编辑返回冲突。备份保留原始文件内容并使用 0600 权限。旧格式在首次更新时备份转换，保留原 UUID、窗口标识和 revision 连续性。生成的 pane 和转发标识保留在内部记录。
+
+新增真实隔离 SSH/tmux 用例验证主配置 include、手写 row 分屏、配置文件改名后继续识别已有会话、save 写回共享文件、保留其他项目注释、手工修改后的 revision 检测及已有会话恢复。测试使用临时配置与 HOME、临时 SSH 身份、独立 tmux socket 和 `/dev/null` 配置；Linux amd64、Go 1.27.3、tmux 3.6。
+
+`make check`（vet、gofmt、diff 与脚本语法）及 Linux/macOS amd64/arm64 四平台 `make cross` 通过。新增配置源码、测试和指南的凭据、私人路径及私网 IP 模式扫描无命中。
+
+覆盖限制：macOS 仅交叉构建，原生文件锁与 tmux 交互待实测。外部编辑器不参与 flock，源文件最终比较与原子替换之间仍有很短的竞争窗口。配置与内部记录使用两个原子文件提交；内部记录提交失败通过 PARTIAL_SUCCESS 报告。窗口配置修改继续在新建会话生效，已有会话保持原运行内容。
+
+## AI skill 分发验收（2026-11-14）
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s -json ./...` 全部通过，含子测试 326 项通过，fish 子测试因缺少解释器跳过。CLI 集成 207.571 秒、真实隔离 tmux 12.809 秒、updater 7.602 秒。原生环境为 Linux amd64、Go 1.27.3、tmux 3.6；测试使用临时 HOME、配置和状态根、临时 SSH 身份、私有 tmux socket 与 `/dev/null` 配置。CLI 测试 PATH 对实际 agent 命令做隔离，保留其他工具。最终隔离方式下再次执行真实远端确认、post-install 迁移、逐项终端确认和无 agent/无终端用例，竞态专项 81.038 秒通过。
+
+检测测试覆盖 PATH 命令、默认及自定义配置目录，验证检测阶段只读。无 agent 时即使显式授权也不创建 agent 目录。JSON、无终端和 none 模式跳过写入，`-y` 保留独立的 skill 确认；显式 detected 模式安装检测到的候选。真实 PTY 测试覆盖逐 agent 接受、拒绝及默认拒绝，拒绝项不创建 skill 目录。签名 bootstrap 验证显式授权及 `curl | sh` 从控制终端逐项确认；远端安装默认跳过，前台客户端确认后在 SSH 目标用户目录写入，逐文件核对内置内容。
+
+生命周期测试覆盖 skill 首次安装、内容更新及回退、相同内容保持 inode、人工编辑和同名文件保留、符号链接及目录冲突、单目标失败后继续、并发锁与取消、环境和自定义路径校验、旧版 Codex 目录参与后续检测，以及 JSON 部分成功详情。本机签名安装、相同内容重装、活跃 SSH/PTY、端口转发、升级与回滚回归通过；tmux 迁移失败时后续 daemon 和 skill hook 仍执行。
+
+`make check`（含 vet、gofmt、diff 和 shell 语法）、Linux/macOS amd64/arm64 四平台 `make cross`、skill-creator 格式校验均通过。校验器所需 PyYAML 使用临时虚拟环境。变更文件及新增内容模式扫描未发现凭据、私人路径或私网地址。
+
+覆盖限制：尚未在实际 Codex、Claude Code 和 Pi 会话中人工验收 skill 的发现、同名来源去重及自动触发；macOS 仅完成交叉构建。skill 内容跨版本同步由生命周期测试验证，签名集成中的不同版本程序由当前源码注入版本号构建，真实历史签名发布包的 skill 回滚链待验收。回滚到尚未内置 skill hook 的历史版本时保留现有 skill。
 
 ## v0.7.0 版本验收（2026-11-13）
 

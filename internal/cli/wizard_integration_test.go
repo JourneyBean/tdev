@@ -126,7 +126,7 @@ func TestSetupWizardAndFreshClientOverrides(t *testing.T) {
 	wizard.write(t, fmt.Sprintf("%d\r", localPort))
 	wizard.waitText(t, "已保存连接 fixture")
 	wizard.exit(t, 0)
-	content, err := os.ReadFile(filepath.Join(root, "client.yaml"))
+	content, err := os.ReadFile(filepath.Join(root, "config.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,9 +136,12 @@ func TestSetupWizardAndFreshClientOverrides(t *testing.T) {
 	if strings.Contains(string(content), "project_id:") {
 		t.Fatal("stored new override fields in legacy client.yaml")
 	}
-	overrides, err := os.ReadFile(filepath.Join(root, "overrides.yaml"))
-	if err != nil || !strings.Contains(string(overrides), project.ID) {
-		t.Fatal("client override file missing", err)
+	bindings, err := os.ReadFile(filepath.Join(root, "state", "client-bindings.json"))
+	if err != nil || !strings.Contains(string(bindings), project.ID) {
+		t.Fatal("client override identity binding missing", err)
+	}
+	if strings.Contains(string(content), project.ID) || !strings.Contains(string(content), "fixture/demo:") {
+		t.Fatal("override declaration should use a named target without UUID")
 	}
 	project, err = store.Update(context.Background(), project.Name, project.Revision, func(p *config.Project) error { p.Windows[0].Name = "最新窗口_中文_🙂"; return nil })
 	if err != nil {

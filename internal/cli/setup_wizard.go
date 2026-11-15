@@ -4,13 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/user"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -18,7 +16,6 @@ import (
 	"unicode"
 
 	"github.com/spf13/cobra"
-	"go.yaml.in/yaml/v3"
 	"tdev/internal/config"
 	"tdev/internal/protocol"
 	"tdev/internal/sshx"
@@ -146,6 +143,11 @@ func cloneServer(s server) server {
 	b, _ := json.Marshal(s)
 	var copy server
 	_ = json.Unmarshal(b, &copy)
+	for name, original := range s.Projects {
+		cloned := copy.Projects[name]
+		cloned.Declared = original.Declared
+		copy.Projects[name] = cloned
+	}
 	return copy
 }
 
@@ -331,14 +333,8 @@ func (a *app) runSetup(ctx context.Context, c *cobra.Command) (any, error) {
 	if a.timeout <= 0 {
 		return nil, config.Invalid("timeout must be positive")
 	}
-	p := defaultPreferences()
-	configPath := filepath.Join(a.store.Root, "client.yaml")
-	if _, err := os.Stat(configPath); err == nil {
-		p, err = a.prefs()
-		if err != nil {
-			return nil, err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	p, err := a.prefs()
+	if err != nil {
 		return nil, err
 	}
 	name, _ := c.Flags().GetString("name")
@@ -350,7 +346,6 @@ func (a *app) runSetup(ctx context.Context, c *cobra.Command) (any, error) {
 		return nil, config.Invalid("setup wizard requires a terminal; use --host HOST --user USER or --ssh-alias ALIAS for noninteractive setup")
 	}
 	s := server{}
-	var err error
 	if interactive {
 		name, s, err = a.chooseConnection(ctx, c, p)
 		if err != nil {
@@ -516,20 +511,20 @@ func (a *app) runSetup(ctx context.Context, c *cobra.Command) (any, error) {
 
 // Save under the client lock, then release it before any project wizard or SSH calls.
 func (a *app) saveSetupConnection(ctx context.Context, c *cobra.Command, name string, s, oldServer server, existed bool) error {
-	configPath := filepath.Join(a.store.Root, "client.yaml")
 	unlock, err := a.store.Lock(ctx, "client", "config")
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	latest := defaultPreferences()
-	if _, err = os.Stat(configPath); err == nil {
-		latest, err = a.prefs()
-		if err != nil {
-			return err
-		}
-	} else if !os.IsNotExist(err) {
+	state, err := a.readClientState()
+	if err != nil {
 		return err
+	}
+	latest := state.prefs
+	latest.Servers = map[string]server{}
+	for name, server := range state.prefs.Servers {
+		server.Projects = state.overrides.Servers[name]
+		latest.Servers[name] = server
 	}
 	current, stillExists := latest.Servers[name]
 	if existed != stillExists || (existed && !reflect.DeepEqual(current, oldServer)) {
@@ -539,17 +534,17 @@ func (a *app) saveSetupConnection(ctx context.Context, c *cobra.Command, name st
 		return err
 	}
 	latest.Servers[name] = s
-	b, err := yaml.Marshal(latest)
-	if err != nil {
-		return err
+	overrides := state.overrides
+	overrides.Servers = map[string]map[string]projectOverride{}
+	for server, entries := range state.overrides.Servers {
+		overrides.Servers[server] = entries
 	}
-	if err = a.writeOverrides(name, s.Projects); err != nil {
-		return err
+	if len(s.Projects) == 0 {
+		delete(overrides.Servers, name)
+	} else {
+		overrides.Servers[name] = s.Projects
 	}
-	if err = config.AtomicWrite(configPath, b, 0600); err != nil {
-		return protocol.Fail("PARTIAL_SUCCESS", 9, "local overrides saved; connection registration could not be saved: %v", err)
-	}
-	return nil
+	return a.writeClientState(ctx, state, latest, overrides)
 }
 
 func (a *app) wizardPorts(ctx context.Context, s server, projects []discoveredProject) (server, error) {

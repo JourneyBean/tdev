@@ -29,7 +29,7 @@ func TestPostInstallContinuesAfterTmuxFailure(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(client.Dir) })
 	a := &app{store: config.Store{Root: root}, timeout: time.Second}
 	report, err := a.postInstall(context.Background(), false)
-	if err == nil || protocol.Normalize(err).Code != "PARTIAL_SUCCESS" || len(report.Hooks) != 2 || report.Hooks[0].Status != "failed" || report.Hooks[1].Status != "succeeded" {
+	if err == nil || protocol.Normalize(err).Code != "PARTIAL_SUCCESS" || len(report.Hooks) != 3 || report.Hooks[0].Status != "failed" || report.Hooks[1].Status != "succeeded" || report.Hooks[2].Status != "succeeded" {
 		t.Fatalf("hooks did not finish independently: %+v %v", report, err)
 	}
 	if _, err := client.Call(context.Background(), daemon.Request{Op: "status"}); protocol.Normalize(err).Code != "DAEMON_UNAVAILABLE" {

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"go.yaml.in/yaml/v3"
+	"tdev/internal/aiskill"
 	"tdev/internal/config"
 	"tdev/internal/daemon"
 	"tdev/internal/protocol"
@@ -55,6 +56,30 @@ func TestUpgradeWithActiveSSHAndForwards(t *testing.T) {
 	local, remote := filepath.Join(t.TempDir(), "tdev"), filepath.Join(t.TempDir(), "tdev")
 	executeBinary(t, oldBinary, root, s.Config, "", 0, "install", "--release-dir", v1, "--public-key", filepath.Join(v1, "release.pub"), "--destination", local, "--completion", "none", "-y")
 	executeBinary(t, local, root, s.Config, "", 0, "setup", "--name", "fixture", "--ssh-alias", s.Alias, "--remote-binary", remote, "--remote-config-dir", remoteRoot, "--install", "--release-dir", v1, "--public-key", filepath.Join(v1, "release.pub"), "-y")
+	// Default JSON installation skips skill writes, even with -y.
+	for _, base := range []string{"home/.agents", "claude", "pi"} {
+		if _, e := os.Stat(filepath.Join(s.Dir, base, "skills/tdev")); !os.IsNotExist(e) {
+			t.Fatalf("unapproved remote skill directory: %v", e)
+		}
+	}
+	for _, base := range []string{"home/.codex", "claude", "pi"} {
+		if e := os.MkdirAll(filepath.Join(s.Dir, base), 0700); e != nil {
+			t.Fatal(e)
+		}
+	}
+	remotePrompt := terminalCLI(t, local, root, s.Config, "post-install", "--remote", "fixture", "-y")
+	for _, agent := range []string{"codex", "cc", "pi"} {
+		remotePrompt.waitText(t, "Install or update tdev skill for "+agent+" at")
+		remotePrompt.write(t, "y\r")
+	}
+	remotePrompt.exit(t, 0)
+	// The remote activation installs into the SSH target's isolated user roots.
+	for _, base := range []string{"home/.agents", "claude", "pi"} {
+		data, e := os.ReadFile(filepath.Join(s.Dir, base, "skills/tdev/SKILL.md"))
+		if e != nil || !bytes.Equal(data, aiskill.Content()) {
+			t.Fatalf("remote skill %s: %v", base, e)
+		}
+	}
 	a := &app{store: config.Store{Root: root}}
 	prefs, err := a.prefs()
 	if err != nil {
@@ -248,7 +273,7 @@ func TestUpgradeWithActiveSSHAndForwards(t *testing.T) {
 			var installed struct {
 				PostInstall postInstallReport `json:"post_install"`
 			}
-			if json.Unmarshal(encoded, &installed) != nil || len(installed.PostInstall.Hooks) != 2 {
+			if json.Unmarshal(encoded, &installed) != nil || len(installed.PostInstall.Hooks) != 3 {
 				t.Fatalf("upgrade/rollback omitted target hooks: %s", encoded)
 			}
 		}

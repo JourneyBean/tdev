@@ -22,7 +22,7 @@ tdev setup
 # 指定 shell
 curl -fsSL https://github.com/JourneyBean/tdev/releases/latest/download/install.sh | sh -s -- --shell zsh
 
-# 仅安装二进制
+# 跳过 PATH 修改与命令补全（仍执行 post-install）
 curl -fsSL https://github.com/JourneyBean/tdev/releases/latest/download/install.sh | sh -s -- --no-modify-path --no-completion
 
 # 一键安装并配置 bash 与 zsh 补全
@@ -82,6 +82,43 @@ tdev completion install --shell all
 
 安装脚本支持 `--completion bash|zsh|all` 直接配置、`--install-completion` 配置检测到的 shell、`--no-completion` 跳过。默认 `auto` 在有终端时询问，无终端时输出后续配置命令。直接运行 `tdev install` 同样支持 `--completion auto|none|bash|zsh|all`；升级和回滚沿用已有配置。
 
+## AI skill
+
+安装脚本、`tdev install`、`tdev upgrade` 和回滚通过目标版本的 `ai-skills` post-install hook，按检测和确认结果安装或更新二进制内置的 `tdev` skill。安装后 AI 可以按需加载 tdev 的项目、会话、转发、挂载与诊断操作指引。skill 使用标准 `SKILL.md`，保持默认自动发现；运行中的 agent 按自身规则重新加载，必要时开启新会话。
+
+检测到对应 agent 命令（`codex`、`claude`、`pi`）或已有配置目录时，才列为安装候选。Codex 配置目录为 `${CODEX_HOME:-~/.codex}`，已有的 tdev Codex skill 也参与检测；cc 和 Pi 使用下表中的配置根。检测仅读取 PATH 和目录，不运行 agent 程序。
+
+交互执行时逐项显示 agent 与目标路径，并询问是否安装或更新，默认回答为否；`-y` 保留用于其他操作，skill 需要单独确认。拒绝后保留原 skill 且不创建目录。默认无终端和 `--json` 调用跳过 skill 写入，结果标记为 `skipped`。没有检测到 agent 时返回空列表。
+
+用户同意后写入以下位置：
+
+| Agent | skill 文件 |
+| --- | --- |
+| Codex | `~/.agents/skills/tdev/SKILL.md` |
+| Claude Code（cc） | `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/tdev/SKILL.md` |
+| Pi | `${PI_CODING_AGENT_DIR:-~/.pi/agent}/skills/tdev/SKILL.md` |
+
+Codex 使用[当前官方用户 skill 目录](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills)；Claude Code 和 Pi 的发现规则见 [Claude Code skills](https://code.claude.com/docs/en/skills) 与 [Pi skills](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md)。环境变量指定的目录须为绝对路径。
+
+```sh
+tdev skill show                             # 查看二进制内置指引
+tdev skill list                             # 只读检测候选
+tdev skill install                          # 检测并逐项询问
+tdev skill install --agent cc               # 仅检查并询问 Claude Code
+tdev skill install --agent codex-legacy      # 旧版 Codex：${CODEX_HOME:-~/.codex}/skills
+tdev skill install --directory "$HOME/other-agent/skills"
+tdev --json --skills detected skill install  # 明确授权安装检测到的候选
+tdev upgrade --skills none                  # 跳过 skill 安装或更新
+```
+
+已有旧版 Codex skill 目录参与后续检测，更新前同样询问确认。回滚到尚未内置 skill hook 的历史版本时，保留现有 skill；操作指引要求以当前已安装程序的 `--help` 为准。
+
+安装脚本、install、upgrade 和 post-install 默认使用 `--skills auto`，有终端时逐项询问，无终端时跳过。安装脚本从 `/dev/tty` 读取确认，支持 `curl | sh`。`--skills detected` 明确授权所有检测到的候选，`--skills none` 跳过；CLI 还支持 `--skills cc,pi` 等明确授权名单，名单仍按检测结果过滤。远端在目标机器检测，客户端逐项询问，再将确认名单传给非交互 API；自动化调用需显式指定授权。每次安装或更新独立确认。使用尚未支持 skill 确认的旧客户端升级时，目标 API 默认跳过 skill；升级后运行新程序的 `tdev skill install` 完成检测与确认。
+
+手动解包安装后，执行 `tdev skill install` 或 `tdev post-install`。`--agent` 筛选检测候选；其他兼容 agent 用 `--directory` 指定其 skills 根目录，tdev 在其中创建 `tdev/`；此自定义位置需再次运行同一命令并确认更新。
+
+同步使用内容摘要识别 tdev 托管文件，内容相同保留原文件，内容变化时原子替换。用户修改过的文件、已有非托管同名文件及 skill 目录或文件的符号链接保留原状，返回冲突路径；确认后可将该路径移走并重试。一个目标失败后继续处理其他目标；部分失败返回 `PARTIAL_SUCCESS`（退出码 9）及逐目标结果，安装完成的二进制保留。skill 按用户安装，与 `--config-dir` 无关；远端安装在目标用户目录执行。
+
 ## 校验与升级
 
 每个 Release 附带 `manifest.json`、`manifest.sig`、`SHA256SUMS`、`SHA256SUMS.sig` 和 `release.pub`。正式安装脚本固定该版本的二进制摘要，在执行下载内容前校验 SHA-256；候选程序再验证 Ed25519 manifest 和版本。
@@ -115,7 +152,7 @@ v0.1.0 使用 tdev api 机器接口。连接旧版服务端时，客户端显示
 
 ## 安装后处理
 
-安装脚本、install、upgrade 和回滚在校验目标程序后调用目标版本的 post-install hooks；新安装路径和相同内容重装均执行。当前依次处理 tmux 运行时配置和 daemon 刷新，某项失败后继续执行后续项。成功响应的 post_install 字段包含逐项结果；失败返回 PARTIAL_SUCCESS（退出码 9），error.details 同时保留安装结果与 hook 结果，已安装的二进制保留。
+安装脚本、install、upgrade 和回滚在校验目标程序后调用目标版本的 post-install hooks；新安装路径和相同内容重装均执行。当前依次处理 tmux 运行时配置、daemon 刷新和 AI skill 同步，某项失败后继续执行后续项。成功响应的 post_install 字段包含逐项结果；失败返回 PARTIAL_SUCCESS（退出码 9），error.details 同时保留安装结果与 hook 结果，已安装的二进制保留。
 
 ```sh
 tdev post-install                       # 补跑本机当前版本的处理
@@ -124,6 +161,11 @@ tdev --json api binary post-install      # 当前机器的非交互入口
 ```
 
 处理范围为指定配置根；其他配置根分别用 `--config-dir` 执行。项目会话按 UUID 匹配，新 scratch 带配置根归属。旧 scratch 缺少归属时显示 skipped，可通过重新附着认领，或显式执行 `tdev post-install --adopt-legacy-scratch` 批量认领当前 tmux server 上尚无归属的 scratch。
+
+项目和客户端配置采用兼容读取、首次保存转换。post-install 保持现有 YAML 格式；
+首次通过 project set/edit 保存旧项目，或通过 setup/override 保存旧客户端设置时，
+自动转换对应文件并保存备份。需要在升级时完成格式转换，可在备份后显式保存原定义。
+格式与回退约束见[配置兼容](configuration.md#内部记录并发与兼容)和[客户端迁移](configuration.md#旧客户端配置迁移)。
 
 tmux 迁移保留进程、窗口和提醒，直接更新标题；配置版本高于当前支持值时保留并报告兼容错误。首次开启焦点事件或迁移到 runtime schema 2 的客户端标题协议后，已附着终端需更新客户端并重新附着，报告中的 reattach_required 标记该要求。daemon 程序摘要相同时保持现有进程，变化时重启并恢复连接；已停止的 daemon 保持停止。
 
