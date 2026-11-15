@@ -6,6 +6,10 @@ Last verified: 2026-11-15。源码基础版本：0.8.0。下表保留集成验�
 
 ## 0.8.0 开发构建与历史配置迁移（2026-11-15）
 
+云端终端用例确认 tmux 会以光标定位替代输出标记后的 CRLF。测试夹具增加 VT 完整行
+验证，覆盖 ASCII/Unicode、命令回显与前缀误匹配；竞态单测及真实两次断线专项通过
+（7.414 秒），make check 通过。标题协议继续按原始输出验证。
+
 源码默认值、Makefile 和 README 基础版本统一为 0.8.0；四平台开发构建及静态检查通过。
 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，
 CLI 227.052 秒、真实隔离 tmux 13.464 秒。

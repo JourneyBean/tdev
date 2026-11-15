@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 	"go.yaml.in/yaml/v3"
 	"tdev/internal/aiskill"
@@ -179,7 +180,31 @@ func (p *terminalProcess) waitText(t *testing.T, text string) {
 	}
 }
 func terminalContains(output, text string) bool {
-	return strings.Contains(output, text) || (!strings.Contains(text, "\x1b") && strings.Contains(ansi.Strip(output), text))
+	if strings.Contains(output, text) || (!strings.Contains(text, "\x1b") && strings.Contains(ansi.Strip(output), text)) {
+		return true
+	}
+	// tmux can position the cursor on the next row instead of writing CRLF.
+	// Require an entire rendered row so an echoed printf command cannot match.
+	marker, line := strings.CutSuffix(text, "\r\n")
+	if !line || marker == "" || strings.ContainsAny(marker, "\r\n\x1b") || !strings.Contains(output, marker) {
+		return false
+	}
+	emulator := vt.NewEmulator(100, 30)
+	drained := make(chan struct{})
+	go func() { _, _ = io.Copy(io.Discard, emulator); close(drained) }()
+	_, err := emulator.Write([]byte(output))
+	screen := emulator.String()
+	_ = emulator.InputPipe().(io.Closer).Close()
+	<-drained
+	if err != nil {
+		return false
+	}
+	for _, row := range strings.Split(screen, "\n") {
+		if strings.TrimRight(row, " ") == marker {
+			return true
+		}
+	}
+	return false
 }
 
 func TestTerminalContains(t *testing.T) {
@@ -190,6 +215,10 @@ func TestTerminalContains(t *testing.T) {
 		{"clear line", "READY\x1b[K\r\n", "READY\r\n", true},
 		{"unicode", "中文🙂\x1b[K\r\n", "中文🙂\r\n", true},
 		{"command echo", "printf 'READY\\n'\r\n", "READY\r\n", false},
+		{"cursor next row", "\x1b[2;1HREADY\x1b[3;1H$ ", "READY\r\n", true},
+		{"unicode cursor next row", "\x1b[2;1H中文🙂\x1b[3;1H$ ", "中文🙂\r\n", true},
+		{"redrawn command echo", "\x1b[2;1Hprintf 'READY\\n'\x1b[3;1H$ ", "READY\r\n", false},
+		{"rendered prefix", "\x1b[2;1HREADYsuffix\x1b[3;1H$ ", "READY\r\n", false},
 		{"raw title", "\x1b]2;tdev: fixture/demo\x07", "\x1b]2;tdev: fixture/demo\x07", true},
 		{"missing title", "READY\r\n", "\x1b]2;tdev: fixture/demo\x07", false},
 	} {
