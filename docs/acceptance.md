@@ -10,6 +10,10 @@ Last verified: 2026-11-15。源码基础版本：0.8.0。下表保留集成验�
 验证，覆盖 ASCII/Unicode、命令回显与前缀误匹配；竞态单测及真实两次断线专项通过
 （7.414 秒），make check 通过。标题协议继续按原始输出验证。
 
+私有 SSH 夹具补齐隔离 HOME 下的 UTF-8 locale、Bash/Zsh 启动文件和短提示符，
+以 C locale 启动客户端验证两次断线、取消重连及 open 创建向导（15.253 秒通过）。
+新增真实 SSH 登录 shell 专项，检查 C.UTF-8、短提示符和 UTF-8 charmap。
+
 源码默认值、Makefile 和 README 基础版本统一为 0.8.0；四平台开发构建及静态检查通过。
 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，
 CLI 227.052 秒、真实隔离 tmux 13.464 秒。

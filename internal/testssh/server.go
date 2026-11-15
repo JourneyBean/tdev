@@ -54,6 +54,16 @@ func Start(t *testing.T) *Server {
 	if err = os.MkdirAll(filepath.Join(dir, "home"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	// HOME isolation must preserve deterministic UTF-8 interactive shells.
+	// sshd otherwise starts with a minimal locale and the host's default prompt.
+	for _, rc := range []string{".bashrc", ".zshrc"} {
+		if err = os.WriteFile(filepath.Join(dir, "home", rc), []byte("export LANG=C.UTF-8 LC_ALL=C.UTF-8\nPS1='$ '\nunset PROMPT_COMMAND\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = os.WriteFile(filepath.Join(dir, "home", ".bash_profile"), []byte(". \"$HOME/.bashrc\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, key := range []string{"host", "client"} {
 		c := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", filepath.Join(dir, key))
 		if b, e := c.CombinedOutput(); e != nil {
@@ -70,7 +80,7 @@ func Start(t *testing.T) *Server {
 	if e != nil {
 		t.Fatal(e)
 	}
-	text := fmt.Sprintf("Port %d\nListenAddress 127.0.0.1\nHostKey %s/host\nPidFile %s/pid\nAuthorizedKeysFile %s/client.pub\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nAllowUsers %s\nAllowTcpForwarding yes\nGatewayPorts no\nSubsystem sftp /usr/lib/openssh/sftp-server\nLogLevel VERBOSE\nSetEnv TDEV_TMUX_SOCKET=tdev-sshd-%d XDG_STATE_HOME=%s/state HOME=%s/home CLAUDE_CONFIG_DIR=%s/claude PI_CODING_AGENT_DIR=%s/pi\n", port, dir, dir, dir, u.Username, port, dir, dir, dir, dir)
+	text := fmt.Sprintf("Port %d\nListenAddress 127.0.0.1\nHostKey %s/host\nPidFile %s/pid\nAuthorizedKeysFile %s/client.pub\nStrictModes no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nUsePAM no\nAllowUsers %s\nAllowTcpForwarding yes\nGatewayPorts no\nSubsystem sftp /usr/lib/openssh/sftp-server\nLogLevel VERBOSE\nSetEnv LANG=C.UTF-8 LC_ALL=C.UTF-8 TDEV_TMUX_SOCKET=tdev-sshd-%d XDG_STATE_HOME=%s/state HOME=%s/home CLAUDE_CONFIG_DIR=%s/claude PI_CODING_AGENT_DIR=%s/pi\n", port, dir, dir, dir, u.Username, port, dir, dir, dir, dir)
 	sshdConfig := filepath.Join(dir, "sshd_config")
 	if e = os.WriteFile(sshdConfig, []byte(text), 0600); e != nil {
 		t.Fatal(e)
