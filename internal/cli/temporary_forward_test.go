@@ -63,7 +63,7 @@ func TestEditProjectForwardsAndOverrides(t *testing.T) {
 func TestTemporaryForwardListingAndFilters(t *testing.T) {
 	listing := projectListing{"dev": {State: "synced", Forwards: []daemon.ForwardState{{Name: "forward-example", Server: "dev", Spec: "-L 127.0.0.1:8080:localhost:8000", State: "waiting", Error: "connection lost"}}}}
 	var out strings.Builder
-	if err := listing.print(&out); err != nil {
+	if err := filterListing(listing, "forward").print(&out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"forward-example", "forward", "waiting", "-L 127.0.0.1:8080:localhost:8000", "connection lost"} {

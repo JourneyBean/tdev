@@ -38,7 +38,7 @@ func (a *app) daemonCommands() {
 		if err != nil {
 			return err
 		}
-		return client.Serve(c.Context(), a.serveDaemonService)
+		return client.Serve(c.Context(), a.serveDaemonService, a.serveWebDiscovery)
 	}})
 }
 
@@ -219,7 +219,7 @@ func (a *app) remoteArgs(ctx context.Context, t target, tty bool, command, purpo
 	if err != nil {
 		return nil, noop, err
 	}
-	release, err := client.TrackChannel(ctx, daemon.Allocation{ID: "c" + strings.ReplaceAll(config.NewID(), "-", ""), Socket: m.Socket, Kind: purpose, Project: t.Project, ClientPID: os.Getpid()})
+	release, err := client.TrackChannel(ctx, daemon.Allocation{Server: t.Name, Scratch: t.Scratch, ID: "c" + strings.ReplaceAll(config.NewID(), "-", ""), Socket: m.Socket, Kind: purpose, Project: t.Project, ClientPID: os.Getpid()})
 	if err != nil {
 		// An already-running older supervisor can still carry SSH operations.
 		if protocol.Normalize(err).Code != "INVALID_CONFIG" {

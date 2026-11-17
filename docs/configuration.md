@@ -240,10 +240,15 @@ client:
     server_alive_count_max: 3
 ```
 
-重连设置的优先级为命令参数、服务器覆盖、client 全局设置和内置默认值。attempts 为初次连接之外的重试次数；0 表示停止重试，always 表示持续重试。HTTP 设置供后续功能使用。向导省略与内置默认值相同的全局配置。
+重连设置的优先级为命令参数、服务器覆盖、client 全局设置和内置默认值。attempts 为初次连接之外的重试次数；0 表示停止重试，always 表示持续重试。HTTP 设置用于 Web 隧道独立重连；代理端口通过 `client.http.port` 配置，默认为 17890。项目 `http` 声明见 [Web 服务转发](web-services.md)。向导省略与内置默认值相同的全局配置。
 
 ## 旧客户端配置迁移
 
 主配置没有 client 块时，继续读取 client.yaml 和 overrides.yaml。首次通过 setup、override 或挂载偏好保存客户端设置时，把完整客户端设置迁入主配置；旧文件以 .legacy.bak 保存私有备份，并保留原文件供旧程序回退。存在 client 块后，新块及其 include 是完整客户端配置来源，旧文件保留作回退数据。client: {} 表示使用内置默认值和空服务器、override 列表。
 
 迁移保留所有服务器、重连/SSH 偏好、端口规则和挂载位置，项目 UUID 转入内部绑定文件。仅手动迁入 YAML 时，可在首次使用时建立身份绑定；迁移整个配置根应同时保留 state 下的记录。
+
+
+项目 `http` 服务支持 `autostart: true|false`，默认为 `true`。daemon 启动时读取本机和
+已配置服务器的全部项目，仅自动启用允许自动启动的服务。`false` 服务通过 open
+手动启用，daemon 重启后再次手动打开。配置示例与启停语义见 [Web 服务转发](web-services.md)。

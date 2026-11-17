@@ -622,26 +622,29 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 		})
 	})
 	t.Run("retry_counts_auth_host_keys_and_connect_cancel", func(t *testing.T) {
+		// Count terminal retries on a separate SSH fixture. Automatic project
+		// discovery keeps using the saved server profile in the background.
+		retrySSH := testssh.Start(t)
 		for _, attempts := range []string{"0", "2"} {
-			before := s.Accepted.Load()
-			s.Offline(true)
-			p := terminalCLI(t, binary, root, s.Config, "open", "fixture/demo", "--reconnect-attempts", attempts, "--reconnect-interval", "20ms")
+			before := retrySSH.Accepted.Load()
+			retrySSH.Offline(true)
+			p := terminalCLI(t, binary, root, retrySSH.Config, "open", "fixture/demo", "--reconnect-attempts", attempts, "--reconnect-interval", "20ms")
 			p.exit(t, 6)
-			s.Offline(false)
+			retrySSH.Offline(false)
 			want := int64(1)
 			if attempts == "2" {
 				want = 3
 			}
-			if count := s.Accepted.Load() - before; count != want {
+			if count := retrySSH.Accepted.Load() - before; count != want {
 				t.Fatalf("initial connection retries=%s opened %d transports, expected %d: %q", attempts, count, want, p.output.String())
 			}
 		}
-		knownPath := filepath.Join(s.Dir, "known_hosts")
+		knownPath := filepath.Join(retrySSH.Dir, "known_hosts")
 		known, err := os.ReadFile(knownPath)
 		if err != nil {
 			t.Fatal(err)
 		}
-		public, err := os.ReadFile(filepath.Join(s.Dir, "client.pub"))
+		public, err := os.ReadFile(filepath.Join(retrySSH.Dir, "client.pub"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -651,12 +654,12 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 		if err = os.WriteFile(knownPath, []byte(wrong), 0600); err != nil {
 			t.Fatal(err)
 		}
-		p := terminalCLI(t, binary, root, s.Config, "open", "fixture/demo", "--reconnect-attempts", "always")
+		p := terminalCLI(t, binary, root, retrySSH.Config, "open", "fixture/demo", "--reconnect-attempts", "always")
 		p.exit(t, 6)
 		if err = os.WriteFile(knownPath, known, 0600); err != nil {
 			t.Fatal(err)
 		}
-		text, err := os.ReadFile(s.Config)
+		text, err := os.ReadFile(retrySSH.Config)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -679,7 +682,7 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 			}
 		}()
 		blackhole := filepath.Join(t.TempDir(), "blackhole.conf")
-		replacement := strings.ReplaceAll(string(text), fmt.Sprintf("Port %d", s.Port), fmt.Sprintf("Port %d", listener.Addr().(*net.TCPAddr).Port))
+		replacement := strings.ReplaceAll(string(text), fmt.Sprintf("Port %d", retrySSH.Port), fmt.Sprintf("Port %d", listener.Addr().(*net.TCPAddr).Port))
 		if err = os.WriteFile(blackhole, []byte(replacement), 0600); err != nil {
 			t.Fatal(err)
 		}

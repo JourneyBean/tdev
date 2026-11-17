@@ -22,25 +22,40 @@ type processHost struct {
 }
 
 type processListing struct {
-	Hosts []processHost `json:"hosts"`
+	Connections []connectionRow `json:"connections"`
+	Hosts       []processHost   `json:"hosts"`
 }
 
 func (a *app) psCommand() {
-	c := &cobra.Command{Use: "ps", Short: "Inspect daemon processes, SSH connections and allocated channels", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
-		ctx, cancel := context.WithTimeout(c.Context(), a.timeout)
-		defer cancel()
-		server, _ := c.Flags().GetString("server")
-		listing, err := a.processes(ctx, server)
-		if !a.json {
-			if printErr := listing.print(a.out); printErr != nil {
-				return printErr
+	parent := group(a.root, "connection", "Inspect managed transport connections")
+	for _, entry := range []struct {
+		parent *cobra.Command
+		name   string
+	}{{a.root, "ps"}, {parent, "ls"}} {
+		c := &cobra.Command{Use: entry.name, Short: "List connections, PIDs and resource users", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
+			ctx, cancel := context.WithTimeout(c.Context(), a.timeout)
+			defer cancel()
+			server, _ := c.Flags().GetString("server")
+			listing, err := a.processes(ctx, server)
+			verbose, _ := c.Flags().GetBool("verbose")
+			if !a.json {
+				var printErr error
+				if verbose {
+					printErr = listing.printVerbose(a.out)
+				} else {
+					printErr = listing.print(a.out)
+				}
+				if printErr != nil {
+					return printErr
+				}
+				return err
 			}
-			return err
-		}
-		return a.result(listing, err)
-	}}
-	c.Flags().String("server", "", "only inspect local or this registered server")
-	a.root.AddCommand(c)
+			return a.result(listing, err)
+		}}
+		c.Flags().String("server", "", "only inspect processes on local or this registered server")
+		c.Flags().Bool("verbose", false, "expand daemon, socket, allocation and channel details")
+		entry.parent.AddCommand(c)
+	}
 }
 
 func (a *app) processes(ctx context.Context, selected string) (processListing, error) {
@@ -106,6 +121,7 @@ func (a *app) processes(ctx context.Context, selected string) (processListing, e
 		}()
 	}
 	wg.Wait()
+	result.Connections = result.connectionRows()
 	for _, row := range result.Hosts {
 		failed := row.Error != nil
 		for _, d := range row.Inventory.Daemons {
@@ -118,7 +134,7 @@ func (a *app) processes(ctx context.Context, selected string) (processListing, e
 	return result, nil
 }
 
-func (p processListing) print(out io.Writer) error {
+func (p processListing) printVerbose(out io.Writer) error {
 	// Quote user-controlled identifiers to keep terminal control bytes inert.
 	var b strings.Builder
 	for _, host := range p.Hosts {

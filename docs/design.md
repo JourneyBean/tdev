@@ -8,7 +8,7 @@
 
 tdev 是通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量工具。项目目录、窗口启动命令和保存的端口映射统一存放在远端；客户端管理连接、用户偏好和本地访问入口。远端无需数据库、Web API 或常驻 tdev 服务。
 
-本文记录产品要求、接口行为与技术取舍。“实现默认决策”可根据实测调整，并同步更新设计。HTTP 域名映射留待后续阶段。
+本文记录产品要求、接口行为与技术取舍。“实现默认决策”可根据实测调整，并同步更新设计。HTTP 域名映射见第 11 节。
 
 ## 1 产品定位与范围
 
@@ -27,7 +27,7 @@ tdev 是通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量�
 - 反向映射明确监听位置和流量方向，说明多客户端可能争用远端监听。
 - 终端重连次数可设为 0、正整数或 always，间隔可配置；重连期间 Ctrl-C 退出。
 - 远端提供非交互 api 子命令，供客户端经 SSH 调用。
-- 后续提供 http://demo.localhost:<固定代理端口> 形式的 HTTP 入口，其重连策略与终端独立。
+- 提供 http://demo.localhost:<固定代理端口> 形式的 HTTP 入口，其重连策略与终端独立。
 
 ### 1.2 用户价值
 
@@ -49,7 +49,7 @@ tdev 是通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量�
   ├─ 本地 daemon → 共享 OpenSSH master → 远端 tdev api 与 tmux attach
   ├─ 本地 daemon → 独立 OpenSSH -N → 端口转发
   ├─ 文件传输、SSHFS 挂载
-  └─ 后续本地 HTTP 代理
+  └─ 本地 HTTP 代理
 ```
 
 ### 2.1 三种信息的归属
@@ -144,7 +144,7 @@ doctor、version、unmount、upgrade 是实现默认补充接口。第一版不�
 5. 恢复终端状态，本机直接连接 tmux，远端交给系统 ssh -t。
 6. 正常 detach 则结束该次 open；异常断线进入重连状态机。
 
-`--only shell,forward,sshfs` 按逗号分隔选择功能；省略时选择 shell+forward，`--mount` 额外选择 sshfs。选中 shell 时附属资源随本次 open 释放，只选择 forward/sshfs 时启动后返回并后台保留，可使用 JSON。服务模式读取已有项目定义，不调用 session ensure。web 为后续 HTTP 服务保留，当前选择时提前报错。
+`--only shell,forward,sshfs,web` 按逗号分隔选择功能；省略时选择 shell+forward+已声明的 web，`--mount` 额外选择 sshfs。选中 shell 时 TCP 转发及新建 SSHFS 挂载随本次 open 释放，只选择 forward/sshfs/web 时启动后返回并后台保留，可使用 JSON。服务模式读取已有项目定义，不调用 session ensure。web 由 daemon 独立后台持有，终端退出后继续运行，`web stop server/project` 显式停止。
 
 交互终端中，open 遇到尚未配置的项目时询问是否创建，填写项目所在机器的已有目录、按需配置窗口与映射后继续打开，新项目默认窗口 main。拒绝保留 PROJECT_NOT_FOUND，Ctrl-C 取消；连接或配置错误按原错误返回。也可从客户端运行 `tdev create`。setup 发现零项目时提供立即创建入口。`ls/show/edit` 管理项目定义，复用原子写入、revision 和备份机制。本机端口偏好继续使用 override。
 
@@ -210,7 +210,7 @@ tdev open dev/demo --only forward
 
 支持标准 TCP 形式 `[bind_address:]port:host:hostport`，IPv6 地址使用方括号。第一版不支持 -D、Unix socket forwarding 和远端动态分配监听端口 0；明确拒绝，不错误解析。端口范围 1–65535。默认监听回环地址，不自动开放到公网或修改服务端 GatewayPorts。
 
-参数按保存的 server 名称解析。至少提供一条 -L/-R。省略 server 时，有远端配置的交互终端提供选择，非交互命令需明确指定；只有本机时默认 local。临时转发独立于项目定义和 tmux 会话，每次运行生成 forward-… 名称。ls 在对应服务器下列出名称、forward 类型、监听状态及规则，stop server/name 停止整组。ls --type forward 仅查询当前客户端 daemon，可在远端不可达时查看转发状态。
+参数按保存的 server 名称解析。至少提供一条 -L/-R。省略 server 时，有远端配置的交互终端提供选择，非交互命令需明确指定；只有本机时默认 local。临时转发独立于项目定义和 tmux 会话，每次运行生成 forward-… 名称。forward ls 在对应服务器下列出名称、temporary 类型、监听状态及规则，stop server/name 停止整组。ls --type forward 仅查询当前客户端 daemon，可在远端不可达时查看转发状态。
 
 forward 的“本地”指运行命令的客户端；local 使用本机 TCP 监听器，远端 server 使用系统 OpenSSH。连接目标来自当前客户端的 server 配置。
 
@@ -253,7 +253,7 @@ ssh:
   server_alive_count_max: 3
 ```
 
-数值是实现默认决策。attempts 接受非负整数或字符串 always；interval 必须为正 duration。forward 是 TCP 转发的独立策略；HTTP 是后续专用策略。CLI 可使用 --reconnect-attempts 与 --reconnect-interval 覆盖当前命令策略。
+数值是实现默认决策。attempts 接受非负整数或字符串 always；interval 必须为正 duration。forward 是 TCP 转发的独立策略；HTTP 是 Web 隧道的独立策略，使用 client.reconnect.http 及服务器覆盖配置。CLI 可使用 --reconnect-attempts 与 --reconnect-interval 覆盖当前命令策略。
 
 ### 6.2 状态转换
 
@@ -287,7 +287,7 @@ OpenSSH 的退出码 255 不能独立区分所有原因。实现不能把所有�
 
 keepalive 决定多久发现连接失效，interval 只决定失效后多久再试。两者不能混为同一参数。open 所属转发可在该次 open 存续期间使用 forward 策略独立恢复，但 open 退出时统一取消；后台日志不得打断交互终端。
 
-### 6.4 HTTP 后续独立运行
+### 6.4 HTTP 独立运行
 
 HTTP 代理及其隧道由本地独立管理进程持有，使用 http 重连策略。终端 detach 或取消终端重连后，HTTP 入口继续运行。隧道中断时返回暂不可用响应；应用 5xx 原样转发，重连仅由 SSH 连接故障触发。
 
@@ -428,12 +428,11 @@ macOS SSHFS 使用 noappledouble/noapplexattr 等选项，防止项目产生 App
 
 本项目开发部署仍受工作入口 AGENTS.md 约束：业务源码通过 SSHFS 编辑，测试构建在远端执行；提供 push/pull 功能不意味着开发代理可绕过该仓库的编辑规定。
 
-## 11 后续 HTTP 域名映射
+## 11 HTTP 域名映射
 
 目标：`http://demo.localhost:<固定代理端口>`，可扩展 `api.demo.localhost`。固定代理端口由客户端偏好设置；项目保存域名到远端服务端口的声明，不保存客户端临时隧道端口。
 
 ```yaml
-# 后续配置版本才启用，第一版不得静默忽略
 http:
   - name: web
     hostname: demo.localhost
@@ -445,7 +444,7 @@ http:
 
 第一阶段不要求监听 80/443，不自动修改证书信任或 hosts，不默认改写响应正文。应用可能需要配置 allowed hosts、Origin、外部 base URL 和 OAuth callback，代理不能承诺自动解决所有应用兼容问题。
 
-HTTP 阶段需要本地长驻代理进程，但不会改变“远端无常驻 tdev 服务”的原则。代理由同一二进制子命令承载，具备显式启停与路由清理能力；具体命令在该阶段单独设计。
+HTTP 阶段需要本地长驻代理进程，但不会改变“远端无常驻 tdev 服务”的原则。代理由现有本地 daemon 承载，默认端口为 17890，通过 client.http.port 配置。`open --only web` 登记路由，`web ls` 查看映射和状态，`web stop server/project` 移除项目路由和隧道。daemon 启动时从本机和已配置服务器读取项目，按 `http[].autostart` 自动启动 Web 服务；该字段默认为 true，false 服务由 open 手动启动。每次重启采用当前项目策略。具体使用和兼容范围见 [Web 服务转发](web-services.md)。
 
 ## 12 技术选型与取舍
 
@@ -522,7 +521,7 @@ GoReleaser 可负责产物组织和发布；安装器、签名验证、远端部
 5. 实现 -L/-R 转发、保存及多客户端冲突处理。
 6. 实现 push/pull、mount/unmount、doctor。
 7. 完成跨平台发布、安装、升级和回退，验证无语言运行时安装。
-8. 第一版稳定后独立实现 HTTP 域名入口与其后台连接管理。
+8. HTTP 域名入口与后台连接管理使用独立重连策略。
 
 开发前读取 AGENTS.md 和 README，核验工作树并保护已有修改。实测引起的设计调整应在 PR 中说明原因、行为变化和验证结果，待验证项统一记录在验收文档中。
 
@@ -533,7 +532,7 @@ GoReleaser 可负责产物组织和发布；安装器、签名验证、远端部
 - [tmuxinator](https://github.com/tmuxinator/tmuxinator)：项目启动定义与生命周期参考。
 - [Tmux Workbench](https://github.com/LeON-Nie-code/tmux-workbench)：远端工作区发现和恢复参考；其本地索引归属与本设计不同。
 - [Tailmux 转发](https://www.tailmux.dev/docs/forwarding/)：转发状态与重连体验参考。
-- [Portless](https://github.com/vercel-labs/portless)：后续 HTTP 域名入口参考。
+- [Portless](https://github.com/vercel-labs/portless)：HTTP 域名入口参考。
 - [OpenSSH ssh](https://man.openbsd.org/ssh)、[ssh_config](https://man.openbsd.org/ssh_config)：PTY、认证、转发、超时和 keepalive 语义。
 - [tmux 剪贴板](https://github.com/tmux/tmux/wiki/Clipboard)、[Xterm 控制序列](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html)：OSC 52、鼠标与终端能力边界。
 - [Go os/exec](https://pkg.go.dev/os/exec)、[Go Modules](https://go.dev/ref/mod)：进程调用与依赖管理。
@@ -547,4 +546,4 @@ GoReleaser 可负责产物组织和发布；安装器、签名验证、远端部
 
 临时会话使用独立 tmux 归属标记，实际名称为 `tdev-scratch-<name>`；未指定名称时以自动生成的 UUID 作为名称，形成 `tdev-scratch-<UUID>`。临时会话独立于项目定义、启动配置、转发及 save。detach 和传输断线保留运行进程，最后一个窗口退出时结束。重连只进入匹配原 session ID 与 generation 的会话。
 
-`ls` 默认展示项目、scratch 和当前客户端的临时转发，支持 `--type project|scratch|forward` 与现有 `--server` 筛选。scratch 从实际 tmux 标记发现，跟随列表缓存和离线状态展示；成功刷新后移除已结束的会话。JSON 包含 projects、scratches 和 forwards 数组。机器接口 `api scratch create|list|status|attach|attachment` 使用 `scratch-v1` 能力门禁，旧服务器保留项目列表并给出 scratch 升级提示。
+`ls` 默认展示已启动的项目、scratch 和临时转发工作项，使用 FORWARD、WEB 列展示完整映射。`project ls` 展示全部项目配置，`session ls` 每行展示一个项目或 scratch 会话及 tmux 客户端数，`forward ls` 每行一条 TCP 映射，`web ls` 每行一条 HTTP 路由。健康状态统一为 running，重连、失败及未知状态独立保留。`--include-inactive` 展示未启动配置，`--all` 继续表示查询所有服务器。`--wide` 展示实际连接 ID 和 PID。`connection ls` 与 `ps` 为同一连接视图，共享 master 只显示一行并枚举使用资源；SERVER 表示进程所在机器。JSON 保留完整发现快照，items 表示当前资源视图，connections 表示归组后的连接。scratch 从 tmux 标记发现，成功刷新后移除已结束会话；离线缓存标为 unknown。机器接口 `api scratch create|list|status|attach|attachment` 使用 scratch-v1 门禁。

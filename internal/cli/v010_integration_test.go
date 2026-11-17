@@ -181,6 +181,7 @@ func TestShellBatchAndOldServerGate(t *testing.T) {
 }
 
 func TestDiscoveryCacheRefreshAndOffline(t *testing.T) {
+	t.Setenv("TDEV_TMUX_SOCKET", "tdev-cache-list-"+config.NewID())
 	if runtime.GOOS != "linux" {
 		t.Skip("private sshd integration runs on Linux")
 	}
@@ -211,7 +212,7 @@ func TestDiscoveryCacheRefreshAndOffline(t *testing.T) {
 	if err != nil || len(data.(projectListing)["dev"].Projects) != 2 {
 		t.Fatal(data, err)
 	}
-	view := terminalCLI(t, binary, root, s.Config, "ls")
+	view := terminalCLI(t, binary, root, s.Config, "ls", "--include-inactive")
 	view.waitText(t, "dev [syncing]")
 	view.waitText(t, "demo")
 	view.exit(t, 0)

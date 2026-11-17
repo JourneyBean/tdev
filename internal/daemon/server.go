@@ -21,6 +21,7 @@ import (
 	"tdev/internal/reconnect"
 	"tdev/internal/sshx"
 	"tdev/internal/transfer"
+	"tdev/internal/webproxy"
 )
 
 type connection struct {
@@ -32,34 +33,40 @@ type connection struct {
 }
 
 type managedForward struct {
-	request  Request
-	group    *forward.Group
-	state    ForwardState
-	ready    chan struct{}
-	finished bool
-	owners   map[string]bool
-	durable  bool
+	resources map[string][]ResourceRef
+	request   Request
+	group     *forward.Group
+	state     ForwardState
+	ready     chan struct{}
+	finished  bool
+	owners    map[string]bool
+	durable   bool
 }
 
 type supervisor struct {
-	binarySHA256    string
-	client          Client
-	ctx             context.Context
-	stop            context.CancelFunc
-	mu              sync.Mutex
-	connections     map[string]*connection
-	forwards        map[string]*managedForward
-	wg              sync.WaitGroup
-	desired         map[string]Request
-	service         func(context.Context, Request) (any, error)
-	stopping        bool
-	leases          map[string]*lease
-	mounts          map[string]*managedMount
-	mountMu         sync.Mutex
-	forwardMu       sync.Mutex
-	warnings        []string
-	ephemeralMounts map[string]bool
-	channels        map[string]Allocation
+	webDiscovery       func(context.Context, Request) (any, error)
+	web                *webproxy.Manager
+	webMu              sync.Mutex
+	webStopped         map[string]bool
+	webAutostartErrors map[string]string
+	binarySHA256       string
+	client             Client
+	ctx                context.Context
+	stop               context.CancelFunc
+	mu                 sync.Mutex
+	connections        map[string]*connection
+	forwards           map[string]*managedForward
+	wg                 sync.WaitGroup
+	desired            map[string]Request
+	service            func(context.Context, Request) (any, error)
+	stopping           bool
+	leases             map[string]*lease
+	mounts             map[string]*managedMount
+	mountMu            sync.Mutex
+	forwardMu          sync.Mutex
+	warnings           []string
+	ephemeralMounts    map[string]bool
+	channels           map[string]Allocation
 }
 
 func identity(r Request) string {
@@ -101,6 +108,10 @@ func (c Client) Serve(ctx context.Context, services ...func(context.Context, Req
 	if executable, e := os.Executable(); e == nil {
 		s.binarySHA256, _ = transfer.Hash(executable)
 	}
+	s.web = webproxy.New()
+	s.webStopped = map[string]bool{}
+	s.webAutostartErrors = map[string]string{}
+	defer s.web.Stop("", "")
 	s.leases = map[string]*lease{}
 	s.mounts = map[string]*managedMount{}
 	s.channels = map[string]Allocation{}
@@ -111,10 +122,14 @@ func (c Client) Serve(ctx context.Context, services ...func(context.Context, Req
 	if len(services) > 0 {
 		s.service = services[0]
 	}
+	if len(services) > 1 {
+		s.webDiscovery = services[1]
+	}
 	if err = s.restore(); err != nil {
 		listener.Close()
 		return err
 	}
+	s.startWebAutostart()
 	server := &http.Server{Handler: s, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second}
 	closed := make(chan struct{})
 	go func() { <-ctx.Done(); _ = server.Close(); close(closed) }()
@@ -167,6 +182,10 @@ func (s *supervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			state, err = s.acquire(req)
 		case "lookup":
 			state, err = s.lookup(req)
+		case "web":
+			state, err = s.startWeb(req, false)
+		case "web-stop":
+			state, err = s.stopWeb(req)
 		case "forward":
 			state, err = s.startForwards(r.Context(), req)
 		case "forward-stop":
@@ -218,9 +237,19 @@ func (s *supervisor) status() State {
 	state := State{Protocol: Protocol, PID: os.Getpid(), Connections: len(s.connections), Forwards: []ForwardState{}}
 	state.BinarySHA256 = s.binarySHA256
 	state.TemporaryForwards = true
-	state.Warnings = append([]string(nil), s.warnings...)
+	state.WebSupported = true
+	if s.web != nil {
+		state.Web = s.web.States()
+	}
+	state.Warnings = append(append([]string(nil), s.warnings...), s.webAutostartWarnings()...)
+	for _, m := range s.mounts {
+		state.Mounts = append(state.Mounts, MountState{Resources: m.request.Resources, Path: m.path, PID: m.pid})
+	}
+	sort.Slice(state.Mounts, func(i, j int) bool { return state.Mounts[i].Path < state.Mounts[j].Path })
 	for _, f := range s.forwards {
-		state.Forwards = append(state.Forwards, f.state)
+		snapshot := f.state
+		snapshot.Resources = f.resourceRefs()
+		state.Forwards = append(state.Forwards, snapshot)
 	}
 	sort.Slice(state.Forwards, func(i, j int) bool { return state.Forwards[i].Spec < state.Forwards[j].Spec })
 	return state
@@ -373,6 +402,11 @@ func (s *supervisor) runForwards(ctx context.Context, req Request, rollback bool
 	if req.Name != "" && (!strings.HasPrefix(req.Name, "forward-") || !config.ValidName(req.Name) || !config.ValidName(req.Server)) {
 		return State{}, config.Invalid("invalid temporary forward identity")
 	}
+	for _, r := range req.Resources {
+		if !config.ValidName(r.Server) || !config.ValidName(r.Name) || (r.Kind != "forward" && r.Kind != "temporary") || (r.Detail != "" && !config.ValidName(r.Detail)) {
+			return State{}, config.Invalid("invalid forward resource reference")
+		}
+	}
 	s.forwardMu.Lock()
 	defer s.forwardMu.Unlock()
 	if !req.Local {
@@ -408,9 +442,11 @@ func (s *supervisor) runForwards(ctx context.Context, req Request, rollback bool
 		if e == nil || e.finished {
 			owners := map[string]bool{}
 			durable := false
+			resources := map[string][]ResourceRef{}
 			if e != nil {
 				owners = e.owners
 				durable = e.durable
+				resources = e.resources
 			}
 			var g *forward.Group
 			opts := req.SSH
@@ -420,15 +456,29 @@ func (s *supervisor) runForwards(ctx context.Context, req Request, rollback bool
 			} else {
 				g = forward.Start(s.ctx, req.Alias, opts, []config.Forward{f}, req.Policy)
 			}
-			e = &managedForward{request: req, group: g, ready: make(chan struct{}), state: ForwardState{Name: req.Name, Server: req.Server, Spec: "-" + f.Direction + " " + f.Spec(), State: "connecting"}, owners: owners, durable: durable}
+			e = &managedForward{request: req, group: g, ready: make(chan struct{}), state: ForwardState{Name: req.Name, Server: req.Server, Spec: "-" + f.Direction + " " + f.Spec(), State: "connecting"}, owners: owners, durable: durable, resources: resources}
 			s.forwards[key] = e
 			s.wg.Add(1)
 			go s.forwardEvents(e)
 		}
+		if e.resources == nil {
+			e.resources = map[string][]ResourceRef{}
+		}
+		refs := []ResourceRef{}
+		for _, r := range req.Resources {
+			if len(req.Forwards) == 1 || r.Detail == f.ID || r.Kind == "temporary" {
+				refs = append(refs, r)
+			}
+		}
+		if req.Name != "" {
+			refs = append(refs, ResourceRef{Server: req.Server, Name: req.Name, Kind: "temporary"})
+		}
+		e.resources[req.Owner] = uniqueResources(append(e.resources[req.Owner], refs...))
 		if req.Owner == "" {
 			e.durable = true
 			persisted := req
 			persisted.Forwards = []config.Forward{f}
+			persisted.Resources = e.resources[""]
 			s.desired[key] = persisted
 			if err := s.save(); err != nil {
 				s.mu.Unlock()
@@ -482,8 +532,21 @@ func (s *supervisor) restore() error {
 		return config.Invalid("invalid daemon state: %v", err)
 	}
 	s.desired = make(map[string]Request, len(requests))
+	refreshed := false
 	for key, req := range requests {
+		// CLI-backed daemons re-read current project policy on every generation.
+		// This also drops services manually opened with autostart:false.
+		if req.Op == "web" && s.webDiscovery != nil {
+			delete(requests, key)
+			refreshed = true
+			continue
+		}
 		s.desired[key] = req
+	}
+	if refreshed {
+		if err := s.save(); err != nil {
+			return err
+		}
 	}
 	// Restoration is asynchronous so offline targets cannot delay local readiness.
 	for _, req := range requests {
@@ -494,6 +557,12 @@ func (s *supervisor) restore() error {
 			switch req.Op {
 			case "acquire":
 				_, _ = s.acquire(req)
+			case "web":
+				if _, err := s.startWeb(req, true); err != nil {
+					s.mu.Lock()
+					s.warnings = append(s.warnings, "web recovery: "+err.Error())
+					s.mu.Unlock()
+				}
 			case "forward":
 				_, _ = s.runForwards(s.ctx, req, false)
 			}

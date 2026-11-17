@@ -181,7 +181,7 @@ func TestDaemonOpenLifetimesAndCompletionReuse(t *testing.T) {
 		t.Fatal("completion restarted a deliberately stopped daemon")
 	}
 	// Invalid feature selections fail before any services start.
-	r := executeBinary(t, binary, root, s.Config, "", 2, "open", "dev/demo", "--only", "web")
+	r := executeBinary(t, binary, root, s.Config, "", 2, "open", "dev/demo", "--only", "unknown")
 	if r.Error == nil || r.Error.Code != "INVALID_CONFIG" {
 		t.Fatal(r)
 	}

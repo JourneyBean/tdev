@@ -17,16 +17,17 @@ import (
 )
 
 type ConnectionView struct {
-	ID          string       `json:"id"`
-	Kind        string       `json:"kind"`
-	Alias       string       `json:"alias,omitempty"`
-	Socket      string       `json:"socket,omitempty"`
-	Spec        string       `json:"spec,omitempty"`
-	Status      string       `json:"status"`
-	Owners      int          `json:"owners"`
-	Durable     bool         `json:"durable"`
-	HelperPID   int          `json:"helper_pid,omitempty"`
-	Allocations []Allocation `json:"allocations"`
+	Resources   []ResourceRef `json:"resources,omitempty"`
+	ID          string        `json:"id"`
+	Kind        string        `json:"kind"`
+	Alias       string        `json:"alias,omitempty"`
+	Socket      string        `json:"socket,omitempty"`
+	Spec        string        `json:"spec,omitempty"`
+	Status      string        `json:"status"`
+	Owners      int           `json:"owners"`
+	Durable     bool          `json:"durable"`
+	HelperPID   int           `json:"helper_pid,omitempty"`
+	Allocations []Allocation  `json:"allocations"`
 	sshx.Inspection
 }
 
@@ -64,14 +65,15 @@ func (s *supervisor) inspect(ctx context.Context) Inspection {
 		if f.request.Local {
 			kind = "local-forward"
 		}
-		result.Connections = append(result.Connections, ConnectionView{ID: key, Kind: kind, Alias: f.request.Alias, Socket: socket, Spec: f.state.Spec, Status: f.state.State, Owners: len(f.owners), Durable: f.durable})
+		result.Connections = append(result.Connections, ConnectionView{Resources: f.resourceRefs(), ID: key, Kind: kind, Alias: f.request.Alias, Socket: socket, Spec: f.state.Spec, Status: f.state.State, Owners: len(f.owners), Durable: f.durable})
 	}
 	for path, m := range s.mounts {
 		alias, _, _ := strings.Cut(m.source, ":")
-		result.Connections = append(result.Connections, ConnectionView{ID: path, Kind: "sshfs", Alias: alias, Spec: path, Status: "registered", Owners: len(m.owners), Durable: m.durable, HelperPID: m.pid,
+		result.Connections = append(result.Connections, ConnectionView{Resources: m.request.Resources, ID: path, Kind: "sshfs", Alias: alias, Spec: path, Status: "registered", Owners: len(m.owners), Durable: m.durable, HelperPID: m.pid,
 			Inspection: sshx.Inspection{State: "independent-transport", ChannelsStatus: "unavailable", Channels: []sshx.Channel{}}})
 	}
 	result.Warnings = append(result.Warnings, s.warnings...)
+	result.Warnings = append(result.Warnings, s.webAutostartWarnings()...)
 	allocations := make(map[string][]Allocation)
 	for _, a := range s.channels {
 		allocations[a.Socket] = append(allocations[a.Socket], a)
@@ -92,6 +94,15 @@ func (s *supervisor) inspect(ctx context.Context) Inspection {
 			c.mu.Unlock()
 		}
 		result.Connections = append(result.Connections, row)
+	}
+	if s.web != nil {
+		for _, tunnel := range s.web.Tunnels() {
+			kind := "web"
+			if tunnel.Local {
+				kind = "local-web"
+			}
+			result.Connections = append(result.Connections, ConnectionView{Resources: []ResourceRef{{Server: tunnel.Server, Name: tunnel.Project, Kind: "web", Detail: tunnel.Name}}, ID: "web/" + tunnel.Hostname, Kind: kind, Socket: tunnel.Socket, Spec: tunnel.Hostname, Status: tunnel.State, Durable: true})
+		}
 	}
 	seen := map[string]bool{}
 	for _, row := range result.Connections {
@@ -124,6 +135,20 @@ func (s *supervisor) inspect(ctx context.Context) Inspection {
 	for index := range result.Connections {
 		row := &result.Connections[index]
 		row.Allocations = allocations[row.Socket]
+		for _, a := range row.Allocations {
+			if a.Project == "" {
+				continue
+			}
+			kind := a.Kind
+			if kind == "terminal" {
+				kind = "session"
+			}
+			if a.Scratch {
+				kind = "scratch"
+			}
+			row.Resources = append(row.Resources, ResourceRef{Server: a.Server, Name: a.Project, Kind: kind})
+		}
+		row.Resources = uniqueResources(row.Resources)
 		if row.Allocations == nil {
 			row.Allocations = []Allocation{}
 		}
@@ -135,7 +160,7 @@ func (s *supervisor) inspect(ctx context.Context) Inspection {
 			row.Inspection = sshx.Inspection{State: "unavailable", ChannelsStatus: "unavailable", Channels: []sshx.Channel{}}
 		}
 		if row.Socket == "" {
-			if row.Kind == "local-forward" {
+			if row.Kind == "local-forward" || row.Kind == "local-web" {
 				row.Inspection.State, row.Inspection.ChannelsStatus = "local", "not-applicable"
 			}
 			continue

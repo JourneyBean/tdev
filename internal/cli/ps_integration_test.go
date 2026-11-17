@@ -133,8 +133,49 @@ func TestPSAcrossLocalAndRemoteDaemonsWithoutStartingStoppedServices(t *testing.
 	if !found {
 		t.Fatal("terminal channel allocation missing")
 	}
+	// Both connection entry points expose the same resource-oriented table.
+	for _, command := range [][]string{{"ps"}, {"connection", "ls"}} {
+		argv := append([]string{"--config-dir", root, "--ssh-config", s.Config}, command...)
+		argv = append(argv, "--server", "local")
+		output, err := exec.Command(binary, argv...).CombinedOutput()
+		if err != nil || !strings.Contains(string(output), "CONNECTION") || !strings.Contains(string(output), "fixture/demo/session") {
+			t.Fatalf("%v: %v %s", command, err, output)
+		}
+	}
+	output, err := exec.Command(binary, "--config-dir", root, "--ssh-config", s.Config, "session", "ls", "--server", "fixture", "--wide").CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "ssh-mux-") || !strings.Contains(string(output), "CLIENTS") {
+		t.Fatalf("wide session table: %v %s", err, output)
+	}
+	attached := false
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 6 && fields[0] == "fixture" && fields[1] == "demo" {
+			attached = fields[4] == "1"
+		}
+	}
+	if !attached {
+		t.Fatalf("attached tmux client count: %s", output)
+	}
+	// The structured connection list retains the original host inventory as well.
+	state := executeBinary(t, binary, root, s.Config, "", 0, "connection", "ls", "--server", "local")
+	data, _ := json.Marshal(state.Data)
+	var connections processListing
+	if err := json.Unmarshal(data, &connections); err != nil || len(connections.Connections) == 0 {
+		t.Fatalf("connection JSON: %s %v", data, err)
+	}
 	terminal.write(t, "tmux detach-client\r")
 	terminal.exit(t, 0)
+	output, err = exec.Command(binary, "--config-dir", root, "--ssh-config", s.Config, "session", "ls", "--server", "fixture", "--wide").CombinedOutput()
+	detached := false
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 8 && fields[0] == "fixture" && fields[1] == "demo" {
+			detached = fields[3] == "running" && fields[4] == "0" && fields[6] == "—" && fields[7] == "—"
+		}
+	}
+	if err != nil || !detached {
+		t.Fatalf("detached session retained connection or lost running state: %v %s", err, output)
+	}
 	s.Offline(true)
 	listing = query(true)
 	if listing.Hosts[0].State != "ready" || listing.Hosts[1].State != "unreachable" {
@@ -146,10 +187,18 @@ func TestPSAcrossLocalAndRemoteDaemonsWithoutStartingStoppedServices(t *testing.
 func TestPSRenderingQuotesUntrustedFields(t *testing.T) {
 	listing := processListing{Hosts: []processHost{{Server: "local", State: "ready", Inventory: daemon.Inventory{Daemons: []daemon.DaemonView{{State: "running", Inspection: daemon.Inspection{PID: 10, ConfigRoot: "config\x1b]2;injected\a", Connections: []daemon.ConnectionView{{Kind: "control\x1b[2J", Status: "active", Inspection: sshx.Inspection{State: "master-running", ChannelsStatus: "available", Channels: []sshx.Channel{{ID: 3, Type: "session", State: "open"}}}}}}}}}}}}
 	var out bytes.Buffer
-	if err := listing.print(&out); err != nil {
+	if err := listing.printVerbose(&out); err != nil {
 		t.Fatal(err)
 	}
 	if strings.ContainsAny(out.String(), "\x1b\a") || !strings.Contains(out.String(), "channel #3 session open") {
 		t.Fatal("unsafe or incomplete process rendering")
 	}
+	out.Reset()
+	if err := listing.print(&out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(out.String(), "\x1b\a") || !strings.Contains(out.String(), "CONNECTION") {
+		t.Fatal("unsafe connection table")
+	}
+
 }

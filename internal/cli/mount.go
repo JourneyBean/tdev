@@ -97,7 +97,7 @@ func (a *app) mountProject(ctx context.Context, t target, p config.Project, path
 		if err != nil {
 			return nil, err
 		}
-		state, err := client.Call(ctx, daemon.Request{Op: "mount", Payload: payload, Owner: t.Lease})
+		state, err := client.Call(ctx, daemon.Request{Resources: []daemon.ResourceRef{{Server: t.Name, Name: p.Name, Kind: "mount"}}, Op: "mount", Payload: payload, Owner: t.Lease})
 		if err != nil {
 			return nil, err
 		}

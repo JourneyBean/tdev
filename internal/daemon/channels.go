@@ -17,6 +17,8 @@ import (
 // Allocation describes a tdev operation, never its command line or environment.
 // Its identity is local bookkeeping, independent of OpenSSH wire channel IDs.
 type Allocation struct {
+	Server    string    `json:"server,omitempty"`
+	Scratch   bool      `json:"scratch,omitempty"`
 	ID        string    `json:"id"`
 	Socket    string    `json:"socket"`
 	Kind      string    `json:"kind"`
@@ -27,7 +29,7 @@ type Allocation struct {
 
 func (s *supervisor) holdChannel(w http.ResponseWriter, r *http.Request, a *Allocation) {
 	var err error
-	if a == nil || !config.ValidName(a.ID) || (a.Project != "" && !config.ValidName(a.Project)) || a.ClientPID <= 0 {
+	if a == nil || !config.ValidName(a.ID) || (a.Project != "" && !config.ValidName(a.Project)) || a.ClientPID <= 0 || (a.Server != "" && !config.ValidName(a.Server)) {
 		err = config.Invalid("invalid channel allocation")
 	} else if a.Kind != "api" && a.Kind != "terminal" && a.Kind != "bootstrap" {
 		err = config.Invalid("invalid channel purpose")

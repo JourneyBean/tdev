@@ -13,9 +13,10 @@ import (
 
 // declaration is the human-authored format. Project remains the machine API model.
 type declaration struct {
-	Dir     string       `yaml:"dir"`
-	Windows []declWindow `yaml:"windows,omitempty"`
-	Ports   []declPort   `yaml:"ports,omitempty"`
+	Dir     string        `yaml:"dir"`
+	Windows []declWindow  `yaml:"windows,omitempty"`
+	Ports   []declPort    `yaml:"ports,omitempty"`
+	HTTP    []HTTPService `yaml:"http,omitempty"`
 }
 type declWindow struct {
 	Name    string    `yaml:"name"`
@@ -84,7 +85,7 @@ func (d declaration) project(name string, old Project) (Project, error) {
 	if err != nil {
 		return Project{}, err
 	}
-	p := Project{SchemaVersion: SchemaVersion, ID: old.ID, Revision: old.Revision, Name: name, Directory: dir, Forwards: []Forward{}}
+	p := Project{SchemaVersion: SchemaVersion, ID: old.ID, Revision: old.Revision, Name: name, Directory: dir, HTTP: d.HTTP, Forwards: []Forward{}}
 	if p.ID == "" {
 		p.ID, p.Revision = NewID(), 1
 	}
@@ -216,7 +217,7 @@ var generatedForwardID = regexp.MustCompile(`^f(?:[a-f0-9]{24}|[a-f0-9]{32})$`)
 var generatedPaneID = regexp.MustCompile(`^[pw](?:[a-f0-9]{24}|[a-f0-9]{32})$`)
 
 func declare(p Project) declaration {
-	d := declaration{Dir: p.Directory}
+	d := declaration{Dir: p.Directory, HTTP: p.HTTP}
 	for _, w := range p.Windows {
 		v := declWindow{Name: w.Name, Dir: w.Directory, Command: w.Command}
 		if v.Dir == "." {

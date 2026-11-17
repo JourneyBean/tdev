@@ -18,7 +18,12 @@ import (
 	"tdev/internal/sshx"
 )
 
+type httpPreferences struct {
+	Port int `yaml:"port"`
+}
+
 type clientDeclaration struct {
+	HTTP      httpPreferences                `yaml:"http,omitempty"`
 	Servers   map[string]server              `yaml:"servers,omitempty"`
 	Overrides map[string]overrideDeclaration `yaml:"overrides,omitempty"`
 	SSH       sshx.Options                   `yaml:"ssh"`
@@ -84,7 +89,7 @@ func (a *app) readClientState() (clientState, error) {
 			return state, config.Invalid("unsupported legacy client schema")
 		}
 	} else {
-		decl := clientDeclaration{Servers: map[string]server{}, Overrides: map[string]overrideDeclaration{}, SSH: state.prefs.SSH, Reconnect: state.prefs.Reconnect}
+		decl := clientDeclaration{HTTP: state.prefs.HTTP, Servers: map[string]server{}, Overrides: map[string]overrideDeclaration{}, SSH: state.prefs.SSH, Reconnect: state.prefs.Reconnect}
 		b, err := yaml.Marshal(doc.Data)
 		if err != nil {
 			return state, err
@@ -92,6 +97,7 @@ func (a *app) readClientState() (clientState, error) {
 		if err := config.Decode(b, &decl); err != nil {
 			return state, config.Invalid("client configuration: %v", err)
 		}
+		state.prefs.HTTP = decl.HTTP
 		state.prefs.Servers, state.prefs.SSH, state.prefs.Reconnect = decl.Servers, decl.SSH, decl.Reconnect
 		bindings, err := a.readBindings()
 		if err != nil {
@@ -174,6 +180,7 @@ func (a *app) readClientState() (clientState, error) {
 }
 func declareClient(p preferences, o clientOverrides) *yaml.Node {
 	decl := struct {
+		HTTP      *httpPreferences               `yaml:"http,omitempty"`
 		Servers   map[string]server              `yaml:"servers,omitempty"`
 		Overrides map[string]overrideDeclaration `yaml:"overrides,omitempty"`
 		SSH       *sshx.Options                  `yaml:"ssh,omitempty"`
@@ -184,6 +191,9 @@ func declareClient(p preferences, o clientOverrides) *yaml.Node {
 			server.RemoteBinary = ""
 		}
 		decl.Servers[name] = server
+	}
+	if p.HTTP != defaultPreferences().HTTP {
+		decl.HTTP = &p.HTTP
 	}
 	options := p.SSH
 	options.ConfigFile = ""

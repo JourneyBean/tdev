@@ -105,6 +105,7 @@ func (s *supervisor) releaseLease(owner string) {
 		var mounts []*managedMount
 		for key, e := range s.forwards {
 			delete(e.owners, owner)
+			delete(e.resources, owner)
 			if !e.durable && len(e.owners) == 0 {
 				delete(s.forwards, key)
 				groups = append(groups, e.group)

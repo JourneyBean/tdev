@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"tdev/internal/config"
@@ -20,7 +21,7 @@ type Scratch struct {
 
 func (m Manager) Scratches(ctx context.Context) ([]Scratch, error) {
 	result := []Scratch{}
-	out, err := m.run(ctx, "list-sessions", "-F", "#{session_id}\t#{@tdev_scratch_name}\t#{@tdev_generation}\t#{session_name}\t#{@tdev_scratch_directory}")
+	out, err := m.run(ctx, "list-sessions", "-F", "#{session_id}\t#{@tdev_scratch_name}\t#{@tdev_generation}\t#{session_name}\t#{@tdev_scratch_directory}\t#{session_attached}")
 	if err != nil {
 		if strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "No such file or directory") || strings.Contains(err.Error(), "no sessions") {
 			return result, nil
@@ -28,14 +29,18 @@ func (m Manager) Scratches(ctx context.Context) ([]Scratch, error) {
 		return nil, err
 	}
 	for _, line := range strings.Split(out, "\n") {
-		f := strings.SplitN(line, "\t", 5)
-		if len(f) != 5 {
+		f := strings.SplitN(line, "\t", 6)
+		if len(f) != 6 {
 			return nil, protocol.Fail("RUNTIME_ERROR", 1, "invalid scratch session metadata")
 		}
 		if !config.ValidName(f[1]) || f[2] == "" {
 			continue
 		}
-		result = append(result, Scratch{Name: f[1], Directory: f[4], Status: Status{Status: "running", SessionID: f[0], Generation: f[2], SessionName: f[3]}})
+		clients, err := strconv.Atoi(f[5])
+		if err != nil {
+			return nil, protocol.Fail("RUNTIME_ERROR", 1, "invalid scratch client count")
+		}
+		result = append(result, Scratch{Name: f[1], Directory: f[4], Status: Status{Clients: &clients, Status: "running", SessionID: f[0], Generation: f[2], SessionName: f[3]}})
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result, nil

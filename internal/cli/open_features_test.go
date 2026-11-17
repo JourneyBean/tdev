@@ -14,7 +14,6 @@ func TestOpenFeatureValidationPrecedesEffects(t *testing.T) {
 		message string
 	}{
 		{[]string{"--only", "unknown"}, "unknown open feature"},
-		{[]string{"--only", "web"}, "future HTTP"},
 		{[]string{"--only="}, "requires"},
 		{[]string{"--only", "shell", "--mount"}, "combining"},
 		{[]string{"--only", "shell"}, "requires an interactive terminal"},

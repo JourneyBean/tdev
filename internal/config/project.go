@@ -23,13 +23,14 @@ var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 var uuidRE = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 
 type Project struct {
-	SchemaVersion int       `yaml:"schema_version" json:"schema_version"`
-	Revision      int       `yaml:"revision" json:"revision"`
-	ID            string    `yaml:"id" json:"id"`
-	Name          string    `yaml:"name" json:"name"`
-	Directory     string    `yaml:"directory" json:"directory"`
-	Windows       []Window  `yaml:"windows" json:"windows"`
-	Forwards      []Forward `yaml:"forwards" json:"forwards"`
+	SchemaVersion int           `yaml:"schema_version" json:"schema_version"`
+	Revision      int           `yaml:"revision" json:"revision"`
+	ID            string        `yaml:"id" json:"id"`
+	Name          string        `yaml:"name" json:"name"`
+	Directory     string        `yaml:"directory" json:"directory"`
+	Windows       []Window      `yaml:"windows" json:"windows"`
+	Forwards      []Forward     `yaml:"forwards" json:"forwards"`
+	HTTP          []HTTPService `yaml:"http,omitempty" json:"http,omitempty"`
 }
 type Window struct {
 	ID        string `yaml:"id" json:"id"`
@@ -155,7 +156,7 @@ func (p Project) Validate() error {
 		}
 		listeners[key] = true
 	}
-	return nil
+	return ValidateHTTP(p.HTTP)
 }
 func (f Forward) Validate() error {
 	if f.Direction != "L" && f.Direction != "R" {

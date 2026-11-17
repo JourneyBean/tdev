@@ -11,27 +11,28 @@
 | 托管 forward | 每条映射使用独立 OpenSSH master；相同配置和映射复用监听 |
 | SSHFS | daemon 启动独立 SSHFS/SFTP 连接，沿用 SSHFS reconnect |
 | scp | 保留独立数据传输连接 |
-| web | 保留功能名称，等待 HTTP 服务实现 |
+| web | HTTP 域名代理及独立隧道，默认随 daemon 自动发现并启动，终端退出后继续运行 |
 
 转发、文件传输与 SSHFS 的流量独立于控制连接。服务端 MaxSessions 配额仍会限制共享控制连接中的终端与 API 并发。项目定义、revision 和 tmux 操作锁继续由目标机器管理。
 
 ## open 的功能与使用权
 
 ```sh
-tdev open dev/demo                       # shell + forward
-tdev open dev/demo --mount               # shell + forward + sshfs
+tdev open dev/demo                       # shell + forward + 已声明的 web
+tdev open dev/demo --mount               # shell + forward + sshfs + 已声明的 web
 tdev open dev/demo --only shell
 tdev open dev/demo --only shell,forward
 tdev open dev/demo --only forward
 tdev open dev/demo --only sshfs
 tdev open dev/demo --only forward,sshfs
+tdev open dev/demo --only web
 ```
 
 选中 shell 时需要交互终端，并 ensure 项目会话。该次 open 为附属资源持有使用权；shell 退出时释放，最后一个使用者离开才清理临时映射和本次新建挂载。多个窗口共享相同映射或挂载，退出其中一个窗口保留其他窗口所需的资源。预先存在的挂载及显式后台打开的资源继续保留。安全卸载遇到忙碌或身份变化时保留挂载，并在 daemon status 中记录 warning。
 
-只选择 forward/sshfs 时启动后返回，可用于非交互命令和 `--json`；资源后台保留。服务模式读取已有项目定义，不创建 tmux 会话或重跑项目命令。`--only` 接受逗号分隔及重复选项；空列表、未知功能、与 `--mount` 混用，以及尚未实现的 web 在操作前报错。scratch 使用 shell。
+只选择 forward/sshfs/web 时启动后返回，可用于非交互命令和 `--json`；资源后台保留。服务模式读取已有项目定义，不创建 tmux 会话或重跑项目命令。`--only` 接受逗号分隔及重复选项；空列表、未知功能、与 `--mount` 混用在操作前报错。scratch 使用 shell。
 
-`daemon stop` 关闭控制连接和托管转发，清除这些资源的恢复登记；显式保留的 SSHFS 通过 `tdev unmount` 安全卸载。停止标记阻止 completion 和后台重连自动拉起 daemon，运行 start 或 restart 恢复使用。`daemon restart` 保留后台转发登记并恢复；仍活跃的 open 重新获取使用权和终端附着。`tdev forward [server] -L/-R ...` 创建具名临时转发组，默认等监听就绪后返回并后台保留；`--foreground` 随命令退出释放。`ls --type forward` 查询当前客户端的临时转发，`stop server/forward-NAME` 停止整组。项目保存的规则统一使用 edit 修改，通过 open 运行。
+`daemon stop` 关闭控制连接、托管转发和 Web 代理，清除这些资源的恢复登记；显式保留的 SSHFS 通过 `tdev unmount` 安全卸载。停止标记阻止 completion 和后台重连自动拉起 daemon，运行 start 或 restart 恢复使用。`daemon restart` 保留后台转发登记并恢复；仍活跃的 open 重新获取使用权和终端附着。`tdev forward [server] -L/-R ...` 创建具名临时转发组，默认等监听就绪后返回并后台保留；`--foreground` 随命令退出释放。`ls --type forward` 查询当前客户端的临时转发，`stop server/forward-NAME` 停止整组。项目保存的规则统一使用 edit 修改，通过 open 运行。
 
 ## 并发与故障恢复
 
@@ -49,7 +50,7 @@ shell 附属资源的使用权由独立 Unix HTTP 请求维持。正常退出显
 
 ## 运维和后续扩展
 
-`tdev ps` 按机器 → daemon → SSH master → 操作分配和实际通道展示当前用户的快照。默认查询本机与全部已登记服务器，`--server local` 或 `--server dev` 缩小范围，`--json` 输出协议数据。每台机器可包含多个配置根的 daemon；远端枚举当前 SSH 登录用户的 tdev daemon，服务器查询保持一跳。远端本来只运行按次 tdev API 时，daemon 列表为空。
+`tdev connection ls` 与 `tdev ps` 展示相同的连接表，每个 SSH master 一行，包含连接 ID、PID、观测机器、类型、状态及使用资源。共用连接的资源合并展示，本机 TCP/Web 按承载 daemon 进程合并。`--verbose` 按机器 → daemon → SSH master → 操作分配和实际通道展开快照。默认查询本机与全部已登记服务器，`--server local` 或 `--server dev` 缩小范围，`--json` 输出协议数据。每台机器可包含多个配置根的 daemon；远端枚举当前 SSH 登录用户的 tdev daemon，服务器查询保持一跳。远端本来只运行按次 tdev API 时，daemon 列表为空。
 
 本机通过私有 Unix socket 查询，远端通过独立的非交互 SSH 调用 `api ps`；查询保持 daemon 停止状态。部分机器不可达时返回 9，文本保留其他结果，JSON 的 error.details 包含完整快照。旧远端缺少 ps-v1 时显示 upgrade-required；旧 daemon 显示 running-legacy 和重启提示。首次升级后可分别在本机和需要查看明细的远端运行 `tdev daemon restart`。
 
@@ -67,7 +68,7 @@ hooks 部分失败后用 `tdev post-install` 或 `tdev post-install --remote dev
 
 daemon 使用启动时的本机进程环境。安装新工具、切换 SSH agent 或修改 SSH 配置后，可运行 `tdev daemon restart` 使后续连接使用新环境及配置。已有控制连接沿用建立时的认证和路由。
 
-本轮为后续 HTTP 服务提供本地监督进程和控制接口。web 监听、域名路由及 HTTP 故障恢复另行实现。
+Web 服务由同一 daemon 持有，使用 HTTP 独立重连策略。daemon 启动时读取本机和已配置服务器的全部项目，`http[].autostart` 默认为 true；false 服务手动 open，重启后再次手动打开。`web status` 查看 URL 与状态，`web stop server/project` 释放项目路由和隧道；细节见 [Web 服务转发](web-services.md)。
 
 ## 依据和验收
 

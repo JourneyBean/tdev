@@ -118,7 +118,7 @@ func (s Store) ReadClient() (ClientDocument, error) {
 					setField(dst, name, v)
 					d.origins[id] = projectSource{file: file, node: v, name: name}
 				}
-			case "ssh", "reconnect":
+			case "ssh", "reconnect", "http":
 				if previous, ok := d.origins[key]; ok {
 					return Invalid("duplicate client %s at %s:%d and %s:%d", key, previous.file.path, previous.node.Line, file.path, value.Line)
 				}
@@ -223,7 +223,7 @@ func (s Store) SaveClient(ctx context.Context, d ClientDocument, before, after *
 		}
 	}
 	// Stable field order for newly generated declarations.
-	for _, section := range []string{"servers", "overrides", "ssh", "reconnect"} {
+	for _, section := range []string{"servers", "overrides", "ssh", "reconnect", "http"} {
 		if !keys[section] {
 			continue
 		}

@@ -48,6 +48,7 @@ type server struct {
 	Projects        map[string]projectOverride `yaml:"-"`
 }
 type preferences struct {
+	HTTP          httpPreferences    `yaml:"http,omitempty"`
 	SchemaVersion int                `yaml:"schema_version"`
 	Servers       map[string]server  `yaml:"servers"`
 	Reconnect     reconnect.Policies `yaml:"reconnect"`
@@ -65,7 +66,7 @@ type target struct {
 }
 
 func defaultPreferences() preferences {
-	return preferences{SchemaVersion: 1, Servers: map[string]server{}, Reconnect: reconnect.Defaults(), SSH: sshx.Defaults()}
+	return preferences{SchemaVersion: 1, HTTP: httpPreferences{Port: 17890}, Servers: map[string]server{}, Reconnect: reconnect.Defaults(), SSH: sshx.Defaults()}
 }
 func (a *app) prefs() (preferences, error) {
 	state, err := a.readClientState()
@@ -73,6 +74,9 @@ func (a *app) prefs() (preferences, error) {
 		return preferences{}, err
 	}
 	p := state.prefs
+	if p.HTTP.Port < 1 || p.HTTP.Port > 65535 {
+		return p, config.Invalid("client.http.port must be between 1 and 65535")
+	}
 	if err = p.SSH.Validate(); err != nil {
 		return p, err
 	}
@@ -309,6 +313,7 @@ func (a *app) client() {
 	a.setupCommand()
 	a.workspaceCommands()
 	a.forwardCommand()
+	a.webCommands()
 	a.transferCommands()
 	a.mountCommands()
 	a.updateCommands()

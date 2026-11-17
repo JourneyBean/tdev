@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -19,9 +17,20 @@ import (
 	"tdev/internal/daemon"
 	"tdev/internal/protocol"
 	"tdev/internal/tmux"
+	"tdev/internal/webproxy"
 )
 
 type serverListing struct {
+	Items       []map[string]string  `json:"items"`
+	Wide        bool                 `json:"-"`
+	ActiveOnly  bool                 `json:"-"`
+	Connections []resourceConnection `json:"connections,omitempty"`
+	Mounts      []daemon.MountState  `json:"mounts,omitempty"`
+
+	View    string           `json:"-"`
+	Web     []webproxy.State `json:"web"`
+	WebPort int              `json:"web_port"`
+
 	Forwards       []daemon.ForwardState `json:"forwards"`
 	Location       string                `json:"location"`
 	State          string                `json:"state"`
@@ -32,6 +41,36 @@ type serverListing struct {
 	ScratchWarning string                `json:"scratch_warning,omitempty"`
 }
 type projectListing map[string]serverListing
+
+func (a *app) sessionListCommand(parent *cobra.Command, name string) {
+	c := a.command(parent, name, "List active work items with TCP and Web mappings", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
+		return a.listProjects(ctx, c)
+	})
+	c.Flags().String("type", "", "filter by project, scratch or forward (legacy temporary forwards)")
+	listingFlags(c)
+	if parent.Name() == "session" {
+		c.Short = "List project and scratch sessions and attached client counts"
+		c.Annotations = map[string]string{"listing-view": "session"}
+	}
+}
+
+func listingFlags(c *cobra.Command) {
+	c.Flags().Bool("wide", false, "show connection IDs and PIDs for each resource")
+	c.Flags().Bool("include-inactive", false, "include configured resources that are stopped")
+	c.Flags().Bool("all", false, "query every configured server (the default)")
+	c.Flags().String("server", "", "only list this saved server")
+}
+
+func (a *app) serviceListCommand(parent *cobra.Command, view string) {
+	c := a.command(parent, "ls", "List "+view+" mappings", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
+		return a.listProjects(ctx, c)
+	})
+	c.Annotations = map[string]string{"listing-view": view}
+	if view == "project" {
+		c.Short = "List configured projects and mappings"
+	}
+	listingFlags(c)
+}
 
 func orderedServers(p preferences) []string {
 	names := make([]string, 0, len(p.Servers))
@@ -61,6 +100,9 @@ func (a *app) listProjects(ctx context.Context, c *cobra.Command) (any, error) {
 
 func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display bool) (projectListing, error) {
 	kind, _ := c.Flags().GetString("type")
+	view := c.Annotations["listing-view"]
+	wide, _ := c.Flags().GetBool("wide")
+	includeInactive, _ := c.Flags().GetBool("include-inactive")
 	if kind != "" && kind != "project" && kind != "scratch" && kind != "forward" {
 		return nil, config.Invalid("--type must be project, scratch or forward")
 	}
@@ -92,8 +134,22 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 	}
 	liveForwards := map[string][]daemon.ForwardState{}
 	for _, f := range state.Forwards {
+		servers := map[string]bool{}
 		if f.Name != "" {
-			liveForwards[f.Server] = append(liveForwards[f.Server], f)
+			servers[f.Server] = true
+		}
+		for _, r := range f.Resources {
+			servers[r.Server] = true
+		}
+		for server := range servers {
+			liveForwards[server] = append(liveForwards[server], f)
+		}
+	}
+	bindings := []resourceConnection{}
+	if wide && err == nil {
+		snapshot, inspectErr := client.Call(ctx, daemon.Request{Op: "inspect"})
+		if inspectErr == nil && snapshot.Inspection != nil {
+			bindings = resourceConnections(*snapshot.Inspection)
 		}
 	}
 	type response struct {
@@ -107,7 +163,25 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 	targets := make([]target, 0, len(names))
 	for _, name := range names {
 		t, _ := a.serverTarget(p, name, "")
-		entry := serverListing{Forwards: append([]daemon.ForwardState{}, liveForwards[name]...), Location: "remote", State: "syncing", Projects: []discoveredProject{}, Scratches: []tmux.Scratch{}}
+		entry := serverListing{Wide: wide, ActiveOnly: !includeInactive && view != "project", View: view, WebPort: p.HTTP.Port, Web: []webproxy.State{}, Forwards: append([]daemon.ForwardState{}, liveForwards[name]...), Location: "remote", State: "syncing", Projects: []discoveredProject{}, Scratches: []tmux.Scratch{}}
+		for _, binding := range bindings {
+			if binding.Resource.Server == name {
+				entry.Connections = append(entry.Connections, binding)
+			}
+		}
+		for _, m := range state.Mounts {
+			for _, r := range m.Resources {
+				if r.Server == name {
+					entry.Mounts = append(entry.Mounts, m)
+					break
+				}
+			}
+		}
+		for _, route := range state.Web {
+			if route.Server == name {
+				entry.Web = append(entry.Web, route)
+			}
+		}
 		if t.Local {
 			entry.Location = "local"
 		}
@@ -162,7 +236,7 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 			}
 			projects, err := a.discover(ctx, t)
 			r := response{name: t.Name, projects: projects, err: err}
-			if err == nil {
+			if err == nil && (view == "" || view == "session") {
 				data, e := a.call(ctx, t, nil, "scratch", "list")
 				if e == nil {
 					e = json.Unmarshal(data, &r.scratches)
@@ -200,7 +274,7 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 				entry.Projects = []discoveredProject{}
 			}
 			t, _ := a.serverTarget(p, update.name, "")
-			if kind != "forward" {
+			if kind != "forward" && (view == "" || view == "session") {
 				a.saveListingCache(t, entry.Projects, entry.Scratches)
 			}
 		}
@@ -214,117 +288,69 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 	}
 	return results, nil
 }
-func (listing projectListing) print(out io.Writer) error {
-	rows := [][6]string{}
-	notes := []string{}
-	hasWarnings := false
-	for _, name := range listingNames(listing) {
-		entry := listing[name]
-		if entry.State != "synced" {
-			notes = append(notes, fmt.Sprintf("%s [%s]", name, entry.State))
-		}
-		if entry.ScratchWarning != "" {
-			notes = append(notes, name+": "+entry.ScratchWarning)
-		}
-		if entry.Error != "" {
-			notes = append(notes, name+": "+entry.Error)
-			if !entry.UpdatedAt.IsZero() {
-				notes = append(notes, fmt.Sprintf("%s 缓存：%s", name, entry.UpdatedAt.Format(time.RFC3339)))
-			}
-		}
-		if len(entry.Projects) == 0 && len(entry.Scratches) == 0 && len(entry.Forwards) == 0 {
-			rows = append(rows, [6]string{name, "—", "—", entry.State, "—", "—"})
-			if entry.State == "synced" {
-				notes = append(notes, "添加项目：tdev create --server "+name)
-			}
-		}
-		for _, project := range entry.Projects {
-			status := project.Session.Status
-			if status == "missing" {
-				status = "inactive"
-			}
-			if project.Session.Warning != "" || project.OverrideError != "" {
-				status += ",warning"
-				hasWarnings = true
-			}
-			rows = append(rows, [6]string{name, project.Project.Name, "project", status, project.Project.Directory, "—"})
-			for i, f := range project.Project.Forwards {
-				direction := "->"
-				if f.Direction == "R" {
-					direction = "<-"
-				}
-				mapping := fmt.Sprintf("%s %s %s",
-					net.JoinHostPort(f.BindAddress, strconv.Itoa(f.ListenPort)), direction,
-					net.JoinHostPort(f.TargetHost, strconv.Itoa(f.TargetPort)))
-				if i == 0 {
-					rows[len(rows)-1][5] = mapping
-				} else {
-					rows = append(rows, [6]string{"", "", "", "", "", mapping})
-				}
-			}
-		}
-		for _, scratch := range entry.Scratches {
-			rows = append(rows, [6]string{name, scratch.Name, "scratch", scratch.Status.Status, scratch.Directory, "—"})
-		}
-		for _, f := range entry.Forwards {
-			status := f.State
-			if f.Error != "" {
-				notes = append(notes, name+"/"+f.Name+": "+f.Error)
-			}
-			rows = append(rows, [6]string{name, f.Name, "forward", status, "—", f.Spec})
-		}
-	}
-	if err := printListingTable(out, rows); err != nil {
-		return err
-	}
-	if hasWarnings {
-		notes = append(notes, "部分项目有 warning，运行 tdev doctor 查看诊断详情。")
-	}
-	if len(notes) > 0 {
-		_, err := fmt.Fprintln(out, "\n"+strings.Join(notes, "\n"))
-		return err
-	}
-	return nil
-}
+func (listing projectListing) print(out io.Writer) error { return listing.printResources(out) }
 
 // Measure terminal cells so CJK names and paths align with ASCII text.
 func printListingTable(out io.Writer, rows [][6]string) error {
-	header := [6]string{"SERVER", "NAME", "TYPE", "STATUS", "DIR", "FORWARDS"}
-	widths := [5]int{}
-	for i := range widths {
-		widths[i] = ansi.StringWidth(header[i])
-		for _, row := range rows {
-			widths[i] = max(widths[i], ansi.StringWidth(row[i]))
+	return printTable(out, [6]string{"SERVER", "NAME", "TYPE", "STATUS", "FORWARD", "WEB"}, rows)
+}
+
+func printTable(out io.Writer, header [6]string, rows [][6]string) error {
+	data := make([][]string, 0, len(rows))
+	for _, row := range rows {
+		data = append(data, append([]string{}, row[:]...))
+	}
+	return printColumns(out, header[:], data)
+}
+
+// printColumns measures terminal cells and quotes control bytes in public output.
+func printColumns(out io.Writer, header []string, rows [][]string) error {
+	clean := func(cell string) string {
+		return strings.Map(func(r rune) rune {
+			if r < 32 || (r >= 127 && r < 160) {
+				return '�'
+			}
+			return r
+		}, cell)
+	}
+	widths := make([]int, len(header))
+	for i, cell := range header {
+		widths[i] = ansi.StringWidth(cell)
+	}
+	data := make([][]string, len(rows))
+	for n, row := range rows {
+		data[n] = make([]string, len(header))
+		for i := range header {
+			if i < len(row) {
+				data[n][i] = clean(row[i])
+			}
+			widths[i] = max(widths[i], ansi.StringWidth(data[n][i]))
 		}
 	}
-	writeRow := func(row [6]string) error {
+	write := func(row []string) error {
 		var line strings.Builder
 		line.WriteString("  ")
 		for i, cell := range row {
 			line.WriteString(cell)
-			if i < len(widths) {
+			if i < len(row)-1 {
 				line.WriteString(strings.Repeat(" ", widths[i]-ansi.StringWidth(cell)+2))
 			}
 		}
 		_, err := fmt.Fprintln(out, strings.TrimRight(line.String(), " "))
 		return err
 	}
-	if err := writeRow(header); err != nil {
+	if err := write(header); err != nil {
 		return err
 	}
-	separator := [6]string{}
-	for i, cell := range header {
-		width := ansi.StringWidth(cell)
-		if i < len(widths) {
-			width = widths[i]
-		}
-		separator[i] = strings.Repeat("─", width)
+	separator := make([]string, len(header))
+	for i := range header {
+		separator[i] = strings.Repeat("─", widths[i])
 	}
-	if err := writeRow(separator); err != nil {
+	if err := write(separator); err != nil {
 		return err
 	}
-	for _, row := range rows {
-		if err := writeRow(row); err != nil {
+	for _, row := range data {
+		if err := write(row); err != nil {
 			return err
 		}
 	}
@@ -334,6 +360,9 @@ func printListingTable(out io.Writer, rows [][6]string) error {
 func filterListing(listing projectListing, kind string) projectListing {
 	result := projectListing{}
 	for name, entry := range listing {
+		if kind == "forward" {
+			entry.View = "temporary"
+		}
 		if kind == "scratch" || kind == "forward" {
 			entry.Projects = []discoveredProject{}
 		}
@@ -343,6 +372,18 @@ func filterListing(listing projectListing, kind string) projectListing {
 		}
 		if kind != "" && kind != "forward" {
 			entry.Forwards = []daemon.ForwardState{}
+		}
+		rows, header := entry.rows(name)
+		entry.Items = []map[string]string{}
+		for _, row := range rows {
+			item := map[string]string{}
+			for i, cell := range row.cells {
+				item[strings.ToLower(header[i])] = cell
+			}
+			if entry.Wide {
+				item["connection"], item["pid"] = entry.wideCells(row.refs)
+			}
+			entry.Items = append(entry.Items, item)
 		}
 		result[name] = entry
 	}

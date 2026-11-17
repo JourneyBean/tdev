@@ -14,11 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"tdev/internal/config"
 	"tdev/internal/daemon"
 	"tdev/internal/testssh"
 )
 
 func TestTemporaryServerForwards(t *testing.T) {
+	t.Setenv("TDEV_TMUX_SOCKET", "tdev-forward-list-"+config.NewID())
 	if runtime.GOOS != "linux" {
 		t.Skip("isolated SSH integration runs on Linux")
 	}
@@ -91,6 +93,27 @@ func TestTemporaryServerForwards(t *testing.T) {
 			b, _ = json.Marshal(listing.Data)
 			if !bytes.Contains(b, []byte(f.Name)) || !bytes.Contains(b, []byte(`"ready"`)) {
 				t.Fatalf("forward missing from listing: %s", b)
+			}
+			forwardListing := executeBinary(t, binary, root, s.Config, "", 0, "forward", "ls", "--server", server)
+			b, _ = json.Marshal(forwardListing.Data)
+			if !bytes.Contains(b, []byte(f.Name)) || !bytes.Contains(b, []byte(`"ready"`)) {
+				t.Fatalf("forward ls missing live rule: %s", b)
+			}
+			for _, command := range [][]string{{"forward", "ls"}, {"ls"}} {
+				args := append([]string{"--config-dir", root, "--ssh-config", s.Config}, command...)
+				args = append(args, "--server", server)
+				output, err := exec.Command(binary, args...).CombinedOutput()
+				if err != nil {
+					t.Fatalf("%v: %v %s", command, err, output)
+				}
+				if command[0] == "forward" {
+					mapping := fmt.Sprintf("127.0.0.1:%d -> localhost:%d", lp, target)
+					if !bytes.Contains(output, []byte(mapping)) || !bytes.Contains(output, []byte(f.Name)) {
+						t.Fatalf("missing TCP mapping: %s", output)
+					}
+				} else if !bytes.Contains(output, []byte(f.Name)) {
+					t.Fatalf("temporary forward missing from overview: %s", output)
+				}
 			}
 			fullListing := executeBinary(t, binary, root, s.Config, "", 0, "ls", "--server", server)
 			b, _ = json.Marshal(fullListing.Data)

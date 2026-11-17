@@ -18,11 +18,17 @@ import (
 	"tdev/internal/protocol"
 	"tdev/internal/reconnect"
 	"tdev/internal/sshx"
+	"tdev/internal/webproxy"
 )
 
 const Protocol = 1
 
 type Request struct {
+	Resources  []ResourceRef `json:",omitempty"`
+	Automatic  bool          `json:",omitempty"`
+	ProjectID  string        `json:",omitempty"`
+	HTTP       []config.HTTPService
+	WebPort    int
 	Name       string `json:",omitempty"`
 	Server     string `json:",omitempty"`
 	Op         string
@@ -38,25 +44,35 @@ type Request struct {
 	Allocation *Allocation `json:",omitempty"`
 }
 
+type MountState struct {
+	Resources []ResourceRef `json:"resources"`
+	Path      string        `json:"path"`
+	PID       int           `json:"pid,omitempty"`
+}
+
 type State struct {
-	TemporaryForwards bool            `json:"temporary_forwards,omitempty"`
-	BinarySHA256      string          `json:"binary_sha256,omitempty"`
-	Protocol          int             `json:"protocol"`
-	PID               int             `json:"pid"`
-	Connections       int             `json:"connections"`
-	Forwards          []ForwardState  `json:"forwards"`
-	Socket            string          `json:"socket,omitempty"`
-	Result            json.RawMessage `json:"result,omitempty"`
-	Warnings          []string        `json:"warnings,omitempty"`
-	Inspection        *Inspection     `json:"inspection,omitempty"`
+	Mounts            []MountState     `json:"mounts,omitempty"`
+	WebSupported      bool             `json:"web_supported,omitempty"`
+	Web               []webproxy.State `json:"web,omitempty"`
+	TemporaryForwards bool             `json:"temporary_forwards,omitempty"`
+	BinarySHA256      string           `json:"binary_sha256,omitempty"`
+	Protocol          int              `json:"protocol"`
+	PID               int              `json:"pid"`
+	Connections       int              `json:"connections"`
+	Forwards          []ForwardState   `json:"forwards"`
+	Socket            string           `json:"socket,omitempty"`
+	Result            json.RawMessage  `json:"result,omitempty"`
+	Warnings          []string         `json:"warnings,omitempty"`
+	Inspection        *Inspection      `json:"inspection,omitempty"`
 }
 
 type ForwardState struct {
-	Name   string `json:"name,omitempty"`
-	Server string `json:"server,omitempty"`
-	Spec   string `json:"spec"`
-	State  string `json:"state"`
-	Error  string `json:"error,omitempty"`
+	Resources []ResourceRef `json:"resources,omitempty"`
+	Name      string        `json:"name,omitempty"`
+	Server    string        `json:"server,omitempty"`
+	Spec      string        `json:"spec"`
+	State     string        `json:"state"`
+	Error     string        `json:"error,omitempty"`
 }
 
 type reply struct {

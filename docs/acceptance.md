@@ -1,8 +1,144 @@
 # 开发验收记录
 
-Last verified: 2026-11-15。源码基础版本：0.8.0。下表保留集成验收使用的开发版版本号。
+Last verified: 2026-11-17。源码基础版本：0.9.0。下表保留集成验收使用的开发版版本号。
 
 本记录汇总第一版核心功能的自动化验证、环境实测和待验证项。
+
+## v0.9.0 发布前迁移验收（2026-11-17）
+
+使用 v0.8.0 标签源码在临时目录构建旧二进制，与当前 v0.9.0 候选执行真实跨版本验收。
+旧程序创建项目、受管理 tmux session、项目后台 TCP 和具名临时 TCP；升级后的
+post-install 保留项目 UUID/revision、session/generation、pane ID/PID 和原始配置字节。
+两条 TCP 监听恢复后均通过实际 HTTP 请求，受管理 skill 更新为当前内容。
+旧程序继续读取未声明 HTTP 的配置。历史完整项目、client.yaml、overrides.yaml
+在首次保存时完成转换并保留备份；项目身份与共享 TCP 定义保持一致。
+显式停止旧 daemon 后再 post-install，停止标记及未运行状态保留。
+
+迁移主流程沿用现有实现，配置/机器 schema 1 与 tmux runtime 2 保持不变。
+旧项目 TCP 归属缺失时保持未知，显式 open --only forward 后复用原监听并补齐引用；
+具名临时组的名称与停止入口保留。新增回归测试覆盖缺少 Resources 的恢复登记，
+核对监听流量、临时组身份、原登记键及匿名项目归属保持未知。
+临时配置、HTTP 监听、skill 根、状态目录与 tmux socket 均隔离，结束后停止测试服务。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过：
+CLI 237.907 秒、真实 tmux 14.199 秒、daemon 4.320 秒、配置 2.080 秒、安装更新 6.980 秒。
+`make check cross build` 和 skill 校验通过；四平台构建覆盖 Linux/macOS amd64/arm64。
+公开内容扫描覆盖 206 个源码/文档文件，凭据、私钥、个人路径及内部 IPv4 模式零命中。
+本轮 Linux 实际运行，macOS 仅交叉构建；HTTP 新配置的旧程序读取和配置逆迁移
+继续采用发布说明中的兼容备份策略，实际 SSHFS 挂载沿用既有验收边界。
+
+## 内置 skill 同步与命令核对（2026-11-17）
+
+内置 skill 已同步工作项/资源/连接查询、JSON items/connections、宽表和 PID 所在机器、
+Web 生命周期及 push/pull。skill-creator 校验通过，实际构建的 skill show 内容与源文件
+及 SHA-256 完整性标记一致。当前环境未发现已安装的 tdev skill 副本。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 300s ./...` 全部通过，
+AI skill 包实际执行 1.147 秒、CLI 集成 230.306 秒；其余包沿用有效缓存。
+CLI 集成包含真实隔离 SSH/tmux 场景，以及 skill 的安装、受管理更新和冲突保护。
+`make check cross build` 通过，覆盖 vet、格式、diff、脚本和四平台构建。
+本轮修改内置说明，实际 Agent 的任务选择行为继续由使用反馈验证。
+命令清单从逐级 help 核对，覆盖 90 个公开命令/分组条目，另核对内部 daemon serve。
+
+## 工作项、资源与连接列表（2026-11-17）
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 300s ./...` 全部通过，
+CLI 实际执行 234.369 秒、daemon 3.912 秒、Web 代理 1.044 秒；其余包沿用有效缓存。
+本轮首轮全量运行的真实隔离 tmux 测试通过（15.353 秒），最终运行复用该结果。
+端点展示与视图的最终专项竞态检查通过（CLI 1.060 秒）。
+`make check cross build` 通过，包含 vet、gofmt、diff、脚本检查和 Linux/macOS
+amd64/arm64 四平台构建。
+
+真实隔离 CLI/SSH/tmux 覆盖工作项与 session 分类、只启用 TCP 或 Web 的项目、
+独立临时转发、连接表与 ps 两个入口、JSON 连接数据、宽表归属、附着客户端数，
+以及 detach 后会话继续 running、客户端数归零、连接列清空。
+共享 TCP 监听测试覆盖两个项目的引用合并、前台引用释放、后台引用恢复及独立转发 ID。
+渲染测试覆盖 Unicode 列宽、状态归一、连接去重、daemon 本机资源合并、
+PID 变化后的连接 ID、JSON items 与文本对应，以及配置变更后运行端点的保留。
+已修改列表用例的本机 tmux 查询使用私有 socket，SSH、配置根和 tmux 会话均隔离。
+未启动项的旧断言改用 `--include-inactive`；连接去重夹具补齐 daemon 运行状态。
+
+覆盖限制：旧 daemon 和旧客户端登记缺少资源引用，宽表归属可显示 `—`；
+需使用当前程序重启 daemon 并重新建立相应资源后补齐。旧服务器缺少 tmux
+客户端数字段时显示 `—`。快照只枚举 tdev 托管连接；SERVER 指 PID 所在的观测机器，
+资源标签中的服务器指目标机器。SSHFS 使用已登记 helper PID，本轮未新增实际挂载验收。
+macOS 本轮仅交叉构建。running 表示 session、监听或承载进程的生命周期状态，
+应用健康仍由应用检查。较旧 OpenSSH 的实际 channel 枚举继续沿用既有兼容限制。
+
+## 会话与转发分类列表（2026-11-16）
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 300s ./...` 全部通过，
+CLI 集成实际执行 229.839 秒，其余包沿用有效缓存。独立执行
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 ./internal/tmux` 通过（13.111 秒）。
+`go vet ./...`、`gofmt -l cmd internal`、`git diff --check`、`make build` 和
+`make cross` 通过，交叉构建覆盖 Linux/macOS amd64/arm64。
+
+真实隔离 CLI/SSH/tmux 覆盖 `ls` 与 `session ls` 的服务器筛选、空列表、缓存、
+未托管会话 warning，以及临时 TCP 转发的 ready 状态和完整映射。
+默认文本列表省略临时转发；`forward ls` 保留其名称及运行状态。
+真实 HTTP 服务验证 `web ls` 的 ready/stopped 状态、映射与客户端代理端口。
+渲染测试覆盖中文对齐、反向和 IPv6 映射、两列独立续行，以及发现失败时保留运行中路由。
+重复占位符的列定位断言已改为按列向后查找，避免两列均为 `—` 时误匹配。
+临时配置预览验证四个列表入口，列表操作保持 daemon 未启动。
+
+覆盖限制：项目 TCP 行展示配置状态 `configured`，当前 daemon 的共享项目转发
+缺少可可靠关联到服务器和项目的运行归属；临时转发和 Web 路由展示已有运行状态。
+映射描述声明及监听关系，应用健康由应用自身检查。macOS 本轮仅交叉构建。
+
+## Web 服务默认自动启动（2026-11-16）
+
+`autostart` 默认 true；省略、显式 true、显式 false 的配置解析与写回专项竞态测试
+通过，非法字符串策略返回配置错误。真实 CLI 验证 daemon 启动后两个未 open 的项目
+同时提供 HTTP，false 服务保持关闭；手动 open 补齐服务，重复打开复用，重启后
+重新按项目策略筛选。web stop 本轮保持停止，下一代 daemon 对 true 服务重新启用，
+配置改为 false 后再次重启保持关闭。自动扫描及服务打开保持私有 tmux 的 missing 状态。
+
+真实隔离 SSH 验证离线启动时本机服务可用、发现失败进入 warnings，网络恢复后
+远端 HTTP 路由自动 ready，临时告警清除，false 服务可由手动 open 补齐。
+加强远端私有 tmux socket 核对的最终专项通过（2.575 秒）。并发调度测试覆盖服务器
+独立重试、恢复告警清除、自动路由从声明重建，以及 stop 与未完成发现之间的竞争。
+组合专项竞态测试通过：CLI 11.410 秒、daemon 2.121 秒、代理 1.042 秒、配置 1.198 秒。
+
+终端重试及认证故障测试改用独立 SSH 夹具，精确计数与后台发现隔离；专项通过
+（2.517 秒）。首次完整运行中出现一次 tmux 布局用例 server exited unexpectedly；
+独立重跑整个真实 tmux 包通过（15.170 秒），该时序现象保留为稳定性跟踪项。
+
+最终 `TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 300s ./...` 全部通过；
+CLI 集成 230.570 秒、真实隔离 tmux 14.226 秒、daemon 4.453 秒。
+`make check cross build` 通过，包含 vet、gofmt、diff 检查、脚本检查，以及 Linux/macOS
+amd64/arm64 四平台构建。本轮沿用临时配置根、SSH 身份及私有 tmux socket。
+
+覆盖限制：自动发现按 daemon 代次执行，运行中新增或修改自动策略需 restart。
+操作系统登录启动项与应用进程重启管理由各自的配置负责。macOS 仅交叉构建，
+真实 macOS 自动发现、SSH agent 更换和长时间网络分区仍待运行验收。
+
+## HTTP Web 服务转发（2026-11-16）
+
+Linux amd64、Go 1.27.3、tmux 3.6。专项竞态测试通过，覆盖项目 HTTP 声明与
+revision 写回、客户端 include 端口配置及写回、非法端口和域名、跨服务器域名冲突、
+重复打开与变更拒绝、Host/路径/查询透传、应用 5xx 保留、隧道不可用 503。
+真实本地 CLI 验证 `open --only web`、JSON、web status/stop 和 tmux missing 状态。
+
+WebSocket 专项通过真实 HTTP upgrade 和双向文本帧验证，停止路由后连接关闭且
+固定代理端口释放。SSE 专项在上游请求结束前读取首条事件，取消客户端后上游收到
+context 取消。真实隔离 sshd 验证 HTTP 传输、应用 500 及重复 open 保持 SSH 连接、
+域名冲突保持原路由、shell lease 释放后 Web 存续、断线 503 和自动恢复、daemon
+restart 恢复，以及显式 stop 清除恢复登记。SSH 身份、配置根和 tmux socket 均隔离。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 全部通过，
+CLI 集成 238.148 秒、真实隔离 tmux 14.346 秒。
+随后按最终源码重复全量检查时，升级集成的“不兼容握手后执行操作”断言出现一次失败；
+该次其余包及 Web 测试通过，真实 tmux 15.129 秒。独立执行
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 150s ./internal/cli -run '^TestUpgradeWithActiveSSHAndForwards$'`
+通过（64.810 秒）。该升级用例的并发时序稳定性保留为待跟踪项。
+`make build`、`make check` 和 Linux/macOS amd64/arm64 四平台 `make cross` 通过。
+变更文件的私人路径、私钥、常见凭据 token 和私网 IPv4 模式扫描无命中。
+
+覆盖限制：macOS 仅交叉构建；浏览器实际的 localhost DNS、前端开发服务器 HMR、
+OAuth/base URL、跨域 Cookie 及真实公网长时间网络分区待应用级验收。WebSocket/SSE
+使用隔离 HTTP 服务，SSH 恢复使用本机故障注入代理。临时隧道预分配与 OpenSSH
+绑定之间的端口竞争按失败状态报告；该竞争及磁盘写入失败尚未故障注入。恢复时
+固定代理端口占用通过 warning 报告，保留原登记；释放端口后可 restart 重试。
 
 ## 0.8.0 开发构建与历史配置迁移（2026-11-15）
 
@@ -532,3 +668,21 @@ Linux tmux 3.6、xterm-256color、独立临时 socket、`/dev/null` 配置和真
 Linux tmux 3.6 的本机与 SSH 场景通过；使用临时解压的 tmux 3.3a 补跑本机标题、焦点、配置保护及迁移测试通过。macOS 原生终端展示与完整嵌套 tmux 会话的最终表现待人工验证；DCS 字节过滤已覆盖嵌套包裹。现有多客户端焦点竞争边界继续适用，双连接名称测试验证标题隔离。
 
 完整 `TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 300s ./...` 通过，CLI 214.793 秒、真实 tmux 包 13.384 秒。最终 PTY 非阻塞 resize 调整后的 terminal 与本机/SSH 定向竞态回归通过；`make check`、Linux/macOS amd64/arm64 四平台 `make cross`、10 秒分块模糊测试通过。验证日志保存在本地 `.summary-web/evidence/title-implementation-*.log`。
+
+## README 与指南整理（2026-11-16）
+
+README 从 395 行整理为 154 行，补充项目亮点、快速开始和文档导航，详细操作与机器接口分别移至 `docs/usage.md`、`docs/api.md`。30 个本地链接及章节锚点检查通过，三份文档的 Gitleaks v8.30.1 扫描无命中。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race ./...` 通过，CLI 231.243 秒，真实隔离 tmux 14.328 秒；另以 `go test -race -count=1 ./internal/tmux` 复跑真实 tmux，13.402 秒通过。`go vet ./...`、`gofmt -l cmd internal`、`git diff --check` 通过。修改范围为文档，沿用现有平台验收边界，未运行交叉构建及 macOS 原生交互验收。
+
+## Warp 文件树调研验证（2026-11-16）
+
+5 个 Warp 官方页面的来源快照与源码审阅记录已保留。Linux tmux 3.6 下
+`go test -race ./internal/cli -run '^TestAlertTitlesThroughAttach$/^local$' -count=1 -v`
+通过，使用独立临时 socket、配置与真实 PTY，覆盖原有本机附着标题与终端行为。
+日志位于 `.summary-web/studies/warp-directory/evidence/tmux-integration.log`。
+
+本轮为文档调研，产品代码未变，未执行全套测试或交叉构建。Warp GUI、SSH extension
+握手、自定义 Added commands、OSC 7、真实 SSHFS 文件树、目录跟随及多 pane/重连行为
+仍需人工验收。本机 tmux 回归通过仅提供已有附着行为的证据。方案见
+[Warp 目录同步调研](warp-directory-integration.md)。

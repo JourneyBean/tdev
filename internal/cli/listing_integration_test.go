@@ -19,6 +19,7 @@ import (
 )
 
 func TestListShowsCacheBeforeRemoteRefresh(t *testing.T) {
+	t.Setenv("TDEV_TMUX_SOCKET", "tdev-cache-list-"+config.NewID())
 	if runtime.GOOS != "linux" {
 		t.Skip("private sshd integration runs on Linux")
 	}
@@ -55,7 +56,7 @@ func TestListShowsCacheBeforeRemoteRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stderr.Close()
-	cmd := exec.Command(binary, "--config-dir", root, "--ssh-config", s.Config, "ls", "--server", "dev")
+	cmd := exec.Command(binary, "--config-dir", root, "--ssh-config", s.Config, "ls", "--server", "dev", "--include-inactive")
 	cmd.Stdin, cmd.Stderr = stdin, stderr
 	master, slave, err := pty.Open()
 	if err != nil {
@@ -112,6 +113,7 @@ func TestListShowsCacheBeforeRemoteRefresh(t *testing.T) {
 }
 
 func TestListProjectsAcrossServers(t *testing.T) {
+	t.Setenv("TDEV_TMUX_SOCKET", "tdev-project-list-"+config.NewID())
 	if runtime.GOOS != "linux" {
 		t.Skip("private sshd integration runs on Linux")
 	}
@@ -124,7 +126,7 @@ func TestListProjectsAcrossServers(t *testing.T) {
 	executeBinary(t, binary, root, s.Config, "", 0, "setup", "--name", "populated", "--ssh-alias", s.Alias, "--remote-binary", binary, "--remote-config-dir", populatedRoot)
 	// An empty server must not hide projects on the other configured server.
 	executeBinary(t, binary, root, s.Config, "", 0, "setup", "--name", "empty", "--ssh-alias", s.Alias, "--remote-binary", binary, "--remote-config-dir", emptyRoot)
-	for _, command := range [][]string{{"ls"}} {
+	for _, command := range [][]string{{"ls"}, {"session", "ls"}} {
 		for _, tc := range []struct {
 			name string
 			args []string
@@ -163,11 +165,11 @@ func TestListProjectsAcrossServers(t *testing.T) {
 		executeBinary(t, binary, root, s.Config, "", 2, append(append([]string{}, command...), "--server", "missing")...)
 		executeBinary(t, binary, root, s.Config, "", 2, append(append([]string{}, command...), "--all", "--server", "empty")...)
 	}
-	output, err := exec.Command(binary, "--config-dir", root, "--ssh-config", s.Config, "ls").CombinedOutput()
+	output, err := exec.Command(binary, "--config-dir", root, "--ssh-config", s.Config, "ls", "--include-inactive").CombinedOutput()
 	if err != nil {
 		t.Fatal(err, string(output))
 	}
-	for _, text := range []string{"SERVER NAME TYPE STATUS DIR FORWARDS", "empty — — synced —", "populated demo project inactive"} {
+	for _, text := range []string{"SERVER NAME TYPE STATUS FORWARD WEB", "empty — — synced —", "populated demo project inactive"} {
 		if !strings.Contains(strings.Join(strings.Fields(string(output)), " "), text) {
 			t.Fatalf("human listing missing %q: %s", text, output)
 		}
@@ -208,7 +210,7 @@ func TestListProjectsAcrossServers(t *testing.T) {
 		if entry := listing["populated"]; len(entry.Projects) != 2 || entry.Projects[1].Project.Name != "healthy" || entry.Projects[1].Session.Status != "running" {
 			t.Fatalf("healthy project missing: %+v", entry)
 		}
-		output, err := exec.Command(binary, "--config-dir", root, "--ssh-config", s.Config, "ls").CombinedOutput()
+		output, err := exec.Command(binary, "--config-dir", root, "--ssh-config", s.Config, "ls", "--include-inactive").CombinedOutput()
 		hasWarningRow := false
 		for _, line := range strings.Split(string(output), "\n") {
 			fields := strings.Fields(line)

@@ -19,6 +19,7 @@ type Manager struct {
 	Socket string
 }
 type Status struct {
+	Clients     *int   `json:"clients,omitempty"`
 	Project     string `json:"project"`
 	Status      string `json:"status"`
 	SessionID   string `json:"session_id,omitempty"`
@@ -57,7 +58,7 @@ func (m Manager) run(ctx context.Context, args ...string) (string, error) {
 func (m Manager) Status(ctx context.Context, p config.Project) (Status, error) {
 	s := Status{Project: p.Name, Status: "missing"}
 	name := SessionName(p)
-	out, err := m.run(ctx, "list-sessions", "-F", "#{session_id}\t#{@tdev_project_id}\t#{@tdev_initialization}\t#{@tdev_generation}\t#{session_name}")
+	out, err := m.run(ctx, "list-sessions", "-F", "#{session_id}\t#{@tdev_project_id}\t#{@tdev_initialization}\t#{@tdev_generation}\t#{session_name}\t#{session_attached}")
 	if err != nil {
 		// Only the documented no-server conditions mean missing; socket/permission failures remain errors.
 		msg := err.Error()
@@ -74,8 +75,8 @@ func (m Manager) Status(ctx context.Context, p config.Project) (Status, error) {
 	var owned []string
 	var occupied string
 	for _, line := range strings.Split(out, "\n") {
-		fields := strings.SplitN(line, "\t", 5)
-		if len(fields) != 5 {
+		fields := strings.SplitN(line, "\t", 6)
+		if len(fields) != 6 {
 			return s, fmt.Errorf("invalid tmux session metadata")
 		}
 		if fields[4] == name && fields[1] != p.ID {
@@ -92,6 +93,11 @@ func (m Manager) Status(ctx context.Context, p config.Project) (Status, error) {
 	}
 	if owned != nil {
 		s.SessionID, s.Generation, s.SessionName = owned[0], owned[3], owned[4]
+		clients, err := strconv.Atoi(owned[5])
+		if err != nil {
+			return s, fmt.Errorf("invalid tmux client count")
+		}
+		s.Clients = &clients
 		s.Status = "running"
 		if owned[2] != "ready" {
 			s.Status = "incomplete"

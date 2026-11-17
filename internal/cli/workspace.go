@@ -16,12 +16,9 @@ import (
 
 func (a *app) workspaceCommands() {
 	a.scratchCommand()
-	ls := a.command(a.root, "ls", "List projects, scratch sessions and temporary forwards", cobra.NoArgs, func(ctx context.Context, c *cobra.Command, _ []string) (any, error) {
-		return a.listProjects(ctx, c)
-	})
-	ls.Flags().String("type", "", "filter by project, scratch or forward")
-	ls.Flags().Bool("all", false, "query every configured server (the default)")
-	ls.Flags().String("server", "", "only list this saved server")
+	a.sessionListCommand(a.root, "ls")
+	a.sessionListCommand(group(a.root, "session", "Inspect workspace sessions"), "ls")
+	a.serviceListCommand(group(a.root, "project", "Inspect configured projects"), "project")
 	for _, op := range []string{"save", "stop", "sh"} {
 		op := op
 		c := a.command(a.root, op+" [project]", "Run project "+op, cobra.MaximumNArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
@@ -202,6 +199,15 @@ func (a *app) workspaceCommands() {
 			}
 			return a.attach(c.Context(), t, s, "", budget)
 		}
+		if selected.web {
+			routes, webErr := a.daemonWeb(c.Context(), t, p)
+			if webErr != nil {
+				return webErr
+			}
+			for _, route := range routes {
+				fmt.Fprintf(a.errOut, "Web: %s (%s)\n", route.URL, route.State)
+			}
+		}
 		if s.Warning != "" {
 			fmt.Fprintf(a.errOut, "warning: %s\n", s.Warning)
 		}
@@ -237,7 +243,7 @@ func (a *app) workspaceCommands() {
 	a.root.AddCommand(open)
 	retryFlags(open)
 	open.Flags().Bool("mount", false, "mount the project directory before attaching")
-	open.Flags().StringSlice("only", nil, "open selected features: shell,forward,sshfs (comma-separated; web is reserved)")
+	open.Flags().StringSlice("only", nil, "open selected features: shell,forward,sshfs,web (comma-separated; web persists after shell exit)")
 	_ = open.RegisterFlagCompletionFunc("only", completeOpenFeatures)
 	doctor := a.command(a.root, "doctor [project]", "Diagnose project warnings, versions and dependencies", cobra.MaximumNArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {
 		local := a.clientDoctor()

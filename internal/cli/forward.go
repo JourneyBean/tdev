@@ -141,6 +141,7 @@ func (a *app) forwardCommand() {
 			}
 		}
 	})
+	a.serviceListCommand(c, "forward")
 	c.Flags().Bool("foreground", false, "keep running until cancelled; release forwards on exit")
 	forwardFlags(c)
 	retryFlags(c)

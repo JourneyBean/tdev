@@ -1,395 +1,159 @@
 # tdev
 
-通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量工具。运行 `tdev setup`
-选择已有连接或填写服务器地址，读取目标设备的项目配置，随后打开项目继续开发。
-复用系统 OpenSSH 和 tmux，远端无需数据库、HTTP API 或常驻 tdev 服务。
+**一条命令，回到你的开发现场。**
 
-当前源码版本为 `0.8.0`，已实现连接向导、项目会话、本机端口覆盖、独立转发与重连、文件传输、SSHFS
-挂载、本地连接 daemon、功能选择、签名安装升级和回滚。设计基线见[产品与技术设计](docs/design.md)，实现取舍见
-[开发记录](docs/development.md)，实际通过与尚未实测的场景见[第一版验收记录](docs/acceptance.md)。
-版本变更见[v0.8.0 发布说明](docs/releases/v0.8.0.md)。二进制 Release 位于
-[GitHub](https://github.com/JourneyBean/tdev/releases)。
+终端、分屏、服务和端口映射，跟着项目一起打开。断开 SSH 后，tmux 中的任务继续运行；
+回来时，`tdev open dev/demo` 接着做。
+
+tdev 用 Go 编写，基于系统 OpenSSH 和 tmux，将本机与远端的开发工作按项目组织起来。
+适合经常在多个项目、终端和开发服务器之间切换的人。
+
+- **按项目恢复工作**：保存窗口、分屏布局、目录和启动命令，新建会话时恢复；已有会话直接接着用。
+- **打开项目，也连上服务**：启动项目预设的端口转发，按需挂载文件；已声明的 Web 服务通过 `*.localhost` 访问。
+- **换台客户端，沿用项目配置**：项目定义保存在项目所在机器，客户端单独保存端口和挂载偏好。
+- **沿用熟悉的工具**：复用现有 SSH 配置和身份，远端只需 tdev、tmux 与兼容 shell。
+- **人和 AI 都能操作**：交互向导和命令补全方便日常使用，JSON 接口与内置 skill 供脚本和 AI agent 调用。
+
+[快速开始](#快速开始) · [使用指南](docs/usage.md) · [配置指南](docs/configuration.md) · [下载版本](https://github.com/JourneyBean/tdev/releases)
 
 ## 安装
+
+支持 macOS / Linux，提供 amd64 / arm64 二进制，运行无需 Go。
 
 ```sh
 curl -fsSL https://github.com/JourneyBean/tdev/releases/latest/download/install.sh | sh
 ```
 
-自动识别 macOS/Linux 及 amd64/arm64，校验后安装到 `~/.local/bin/tdev`，并配置当前 shell 的 PATH。
-安装完成后询问是否配置 bash/zsh 命令补全，支持 `curl | sh`；使用 `--completion all` 可直接配置两种 shell，`--no-completion` 跳过。
-打开新终端，或执行安装器输出的 PATH 命令即可使用。支持 `--no-modify-path`，也可以单独运行 `tdev path --write`。
+安装器校验下载内容，默认安装到 `~/.local/bin/tdev`，配置 PATH，并询问是否启用
+bash/zsh 补全。打开新终端，或执行安装器输出的 PATH 命令后即可使用。
+本机管理会话需要 tmux；纯远端客户端使用系统 SSH，远端需要 tdev 和 tmux。
 
-[四平台二进制下载、手动安装和签名校验](docs/installation.md)
+手动安装、签名校验与离线安装见[安装指南](docs/installation.md)。
 
-安装、升级和回滚会调用目标版本的 post-install hooks，迁移当前配置的运行中 tmux 会话，并按需刷新运行中的 daemon。相同内容重装也会补跑；失败返回部分成功，保留安装结果。可用 `tdev post-install` 重试，远端使用 `tdev post-install --remote dev`。旧客户端首次升级后需手动补跑一次。详见[安装后处理](docs/installation.md#安装后处理)。
+## 快速开始
 
-## AI skill
-
-安装或升级时检测 Codex、Claude Code（cc）和 Pi，逐项询问是否安装或更新 `tdev` skill。检测依据为 agent 命令或已有配置目录；默认不安装，无终端时跳过。skill 随二进制发布，保留用户修改并报告冲突。
+先连接开发服务器，再创建并打开项目：
 
 ```sh
-tdev skill install                   # 检测并逐项确认安装
-tdev skill install --agent cc        # 仅安装 Claude Code
-tdev skill show                      # 查看内置指引
-tdev --skills detected skill install # 显式授权安装检测到的 skill
+tdev setup                       # 选择已有 SSH 连接，或填写服务器地址
+# 以下假设将连接命名为 dev
+tdev create dev/demo              # 配置项目目录、启动窗口和端口
+tdev open dev/demo                # 进入项目，启动已配置的转发和 Web 入口
 ```
 
-默认目录、旧版 Codex 与其他兼容 agent 的安装方式见[安装文档](docs/installation.md#ai-skill)。
+`setup` 会检查连接和远端依赖；远端缺少 tdev 时，可以确认安装官方签名版本。
+项目目录不存在时，创建向导会询问是否创建。
 
-## Shell 命令补全
-
-一键配置启动文件，打开新终端生效：
-
-```sh
-tdev completion install                     # 根据 SHELL 选择
-tdev completion install --shell all         # 同时配置 bash 和 zsh
-```
-
-重复执行只更新管理区块，保留原配置、权限和符号链接，并在修改前备份。补全与 PATH 使用独立区块。
-
-使用新版 `tdev`，在当前终端加载补全：
+也可以先在本机试用，`local` 无需配置连接：
 
 ```sh
-# zsh：放在已有 compinit 初始化之后
-autoload -Uz compinit && compinit
-source <(tdev completion zsh)
-
-# bash
-source <(tdev completion bash)
-```
-
-将对应的 `source` 行加入 `~/.zshrc` 或 Bash 的交互启动文件即可持久启用。
-支持子命令、选项、`--server` / `--remote` 服务器名、SSH 别名、转发 ID。
-`tdev open <Tab>` 查询本机和已配置服务器的项目，`tdev open dev/<Tab>` 查询指定服务器；
-`tdev create <Tab>` 补全服务器前缀，供继续填写新项目名。远端候选每次只读查询，
-使用非交互 SSH 和 1.5 秒等待上限，连接不可用时返回空候选。脚本生成过程只读取命令结构。
-
-## 开始使用
-
-项目是默认操作对象。`local` 是内置服务器，无需 setup；远端通过系统 SSH 连接。
-
-```sh
-tdev create demo --directory /home/developer/projects/demo
+mkdir -p ~/projects/demo
+tdev create local/demo --directory ~/projects/demo
 tdev open local/demo
-tdev setup                       # 添加远端服务器
-tdev ls                          # 本机与全部远端
-tdev ls --server dev              # 指定服务器
-tdev create dev/demo              # 交互配置远端项目
-tdev open dev/demo
 ```
 
-本地 daemon 按需启动，API、补全与终端复用控制连接；转发及 SSHFS 使用独立连接。
+在 tmux 中按 `Ctrl-b d` 分离会话，任务继续运行；再次 `tdev open dev/demo` 即可返回。
+`tdev stop dev/demo` 会结束项目会话及其中的进程，启动配置保留。
+
+## 日常使用
 
 ```sh
-tdev daemon start                  # 幂等启动
-tdev daemon status
-tdev daemon restart
-tdev daemon stop                   # 保持停止，start 恢复
-tdev ps                            # 本机与已登记远端的 daemon、SSH 连接及通道
-tdev ps --server local             # 仅查询本机
-tdev ps --json                     # 结构化快照
-tdev open dev/demo --only shell
-tdev open dev/demo --only forward  # 后台保留转发，启动后返回
-tdev open dev/demo --only sshfs    # 使用已配置挂载路径；交互时可询问路径
-tdev open dev/demo --only forward,sshfs
+tdev ls                          # 查看已启动工作项及 TCP/Web 映射
+tdev session ls                  # 查看项目与 scratch 会话及客户端数
+tdev project ls                  # 查看全部项目配置
+tdev connection ls               # 查看连接、PID 和使用资源（也可用 ps）
+tdev forward ls                  # 查看 TCP 映射
+tdev web ls                      # 查看 Web 映射和状态
+tdev show dev/demo               # 查看项目配置及本机覆盖结果
+tdev edit dev/demo               # 修改目录、窗口与端口映射
+tdev sh dev/demo --name logs     # 新开一个项目窗口
+tdev save dev/demo               # 保存当前窗口与分屏布局
+tdev scratch dev --name debug    # 创建临时会话，之后用 open dev/debug 返回
+tdev doctor dev/demo             # 检查依赖、会话与配置
 ```
 
-默认 `open` 启动 shell 和 forward，`--mount` 额外启动 SSHFS；shell 退出时释放本次附属资源，其他窗口仍使用的资源保留。只选 forward/sshfs 时后台保留，转发通过 daemon stop 结束，挂载通过 unmount 安全卸载。web 等待后续 HTTP 服务实现。详见[连接管理](docs/ssh-connection-reuse.md)。
-
-`ps` 按机器、daemon、连接和通道展示当前用户的运行状态，支持 `--server dev`。查询保持已停止的 daemon 状态，远端使用非交互 SSH；部分服务器不可达时保留其他结果并返回 9。旧 daemon 需先用新版 `tdev daemon restart` 启用明细。实际 SSH 通道查询需要 OpenSSH 10.3 或更新版本；旧版展示 tdev 的操作分配记录，并标明实际通道统计不可用。
-
-完整标识为 `server/project`。裸名称先查本机，再按服务器名称排序查找远端；自动匹配时显示完整目标。缓存命中的目标离线时报告错误。裸名称 create 默认在本机创建；不带项目名的 create 向导先选择位置，本机为默认项。
-
-`ls` 默认以 `SERVER、NAME、TYPE、STATUS、DIR、FORWARDS` 六列表格展示，中文按终端显示宽度对齐。端口映射显示在 `FORWARDS` 列，多条映射向下排列；列内以 `监听地址:端口 -> 目标地址:端口` 表示本地转发（`-L`），反向转发（`-R`）使用 `<-`，省略映射 ID。标准输出为终端时，先展示本机与远端缓存，表格下方显示服务器 `syncing`；随后并发查询每台服务器，更新条目并移除已完成的刷新提示。项目 warning 合并在状态列中，如 `running,warning`，列表末尾统一提示 `tdev doctor`；该命令展示完整诊断，也可用 `tdev doctor server/project` 单独检查项目。连接失败保留带时间的缓存并标记 `unreachable`，协议不兼容标记 `upgrade-required`，服务器应用错误标记 `error`。管道输出只展示最终列表；`--json` 返回一次结构化结果，包含位置、状态、更新时间和项目。部分失败时退出码为 9，结果保留在错误的 details 中。
-
-缓存位于系统临时目录的用户私有目录，供列表展示和项目发现。实际操作始终读取目标机器的最新项目定义，再应用当前客户端 override。项目配置保存在项目所在机器。
-
-## 创建、查看和编辑
-
-```sh
-tdev create                      # 选择位置，再配置项目
-tdev create --server dev
-tdev create dev/demo --directory /home/developer/projects/demo
-tdev show dev/demo
-tdev edit dev/demo
-tdev edit dev/demo --directory /home/developer/projects/new-demo
-tdev override dev/demo --forward FORWARD_ID --local-port 18000
-```
-
-create 和 edit 复用逐项向导，edit 预填已有值：项目目录、启动窗口、端口映射及保存确认。目录支持绝对路径、`~/路径` 与 Tab 补全；目录不存在时询问是否创建，默认不创建。确认后在项目所在机器创建目录及缺失的父目录，随后取消向导仍保留目录。非交互 `--directory` 要求目录已存在。初始窗口默认为 `main`。输入支持方向键、Home/End 和删除，兼容 UTF-8、空格与引号。
-
-添加映射时选择 L/R，直接输入 `localhost:8000`、`service.internal:3000` 或 `[::1]:8000`。监听端口默认取服务端口。远端 L 映射的默认监听端口保存在项目定义，当前客户端的端口调整单独保存为 override。可连续添加或跳过。项目转发的增、删、改统一使用 `edit`；保存后通过 `open` 或 `open --only forward` 建立监听。
-
-项目文件使用具名项目、`dir`、`windows` 和 `ports` 的简洁 YAML，支持单文件及 include 拆分，见[项目配置](docs/configuration.md)。UUID 与 revision 保存在独立内部记录。通过 CLI 修改会检查 revision 并备份源文件。机器接口完整替换使用 `edit --stdin --expected-revision N`，输入为 show 的 `definition` 对象。show 同时展示原始定义、override 与最终生效配置。窗口启动命令在新建会话时执行。
-
-## 会话和窗口
-
-托管会话会把窗口提醒汇总到终端标题：有待查看提醒时显示 `[!]`，切换到对应 tmux 窗口清除该窗口的提醒，全部清除后恢复普通标题。终端支持焦点上报时，失焦期间当前窗口收到 bell 也保留标记，重新聚焦时清除当前窗口的标记。新会话自动配置，已有会话在下次通过 tdev 附着时补齐；终端需允许应用修改标题。
-
-独立临时会话使用 `scratch`，支持本机和已登记服务器：
-
-```sh
-tdev scratch dev --name debug          # 新建并进入远端临时 session
-tdev scratch local                    # 本机创建，自动生成唯一名称
-tdev scratch dev --dir '~/projects'    # 在目标机器上展开 home 路径
-tdev open dev/debug                   # 恢复已有临时 session
-tdev open debug                       # 按名称查找项目或 scratch
-tdev ls --type scratch --server dev   # 筛选临时会话
-```
-
-省略服务器且仅有本机可用时直接使用本机；配置了远端服务器时显示选择器，JSON 调用需显式指定服务器。默认从目标用户的 home 启动，`--dir` 接受绝对路径或 `~/` 前缀；远端 home 路径应加引号。名称重复时返回冲突。恢复统一使用 `tdev open <名称>` 或 `tdev open <服务器>/<名称>`；`scratch` 仅用于新建。`--json scratch ...` 创建会话并返回身份信息，终端附着使用交互命令。
-
-`open` 的裸名称查找先使用本机，再使用已登记服务器的缓存索引和实时查询；显式服务器前缀可固定目标。同一服务器的项目与 scratch 同名时返回冲突，需要先调整名称。scratch 的 open 直接恢复会话，`--mount` 仅适用于项目。缓存中已知的 scratch 结束后返回会话缺失；完全未知的名称沿用项目创建向导。
-
-scratch 通过 tmux 标记发现，独立于项目定义和 `save`。detach 或 SSH 断线后进程继续运行，最后一个窗口退出后会话结束。自动重连校验原 session ID 和 generation；detach 后可按名称恢复。`ls` 默认同时展示项目和 scratch，并标明类型；`--type project` 仅显示项目。远端不可达时保留带时间的缓存；已结束的 scratch 在成功刷新后消失。远端需支持 `scratch-v1`；旧版服务器的项目列表继续展示，并提示升级以发现 scratch。
-
-```sh
-tdev open dev/demo
-tdev sh --name debug              # 当前项目中新建临时窗口
-tdev sh dev/demo --name logs --save
-tdev save
-tdev stop dev/demo -y
-```
-
-新建项目 tmux session 使用 `tdev-project-<name>`，如 `tdev-project-demo`，归属按项目 UUID 标记识别。旧版或手工改名的托管 session 可直接复用，名称差异显示 warning。普通会话使用项目逻辑名称时与项目独立。`tdev-project-<name>` 被无匹配 UUID 的会话占用时，`ls` 显示 `unmanaged` 和 warning，`open` 保留原会话并创建独立的 `tdev-project-<UUID>` 托管会话（UUID 去掉连字符）。scratch 使用 `tdev-scratch-<name>`，省略名称时使用自动生成的 UUID。warning 保持列表刷新成功；多个会话使用同一项目 UUID 时，接管或停止操作需先确认归属。
-
-open 遇到项目不存在时，确认后进入创建向导，保存后继续打开。新项目默认窗口为 `main`，已有项目沿用保存的名称。sh 的新窗口默认叫 `shell`，`--name` 可指定名称。
-
-## 分屏布局
-
-在项目的 tmux 窗口中手动分屏后运行 `tdev save`，即可保存布局。新建会话时恢复分屏方向、嵌套结构、比例和各 pane 的目录。已声明的 pane 启动命令继续保留，手动新增 pane 保存为空 shell。
-
-手写项目配置也可以声明分屏：
+项目目录、启动窗口和端口也可以直接用 YAML 声明：
 
 ```yaml
 demo:
   dir: ~/projects/demo
   windows:
+    - name: editor
+      command: nvim .
     - name: web
-      layout:
-        column:
-          - name: frontend
-            dir: frontend
-            command: npm run dev
-          - name: backend
-            dir: backend
-            command: uv run server.py
+      command: npm run dev
+  ports:
+    - "3000:127.0.0.1:3000"
 ```
 
-`row` 表示左右排列，`column` 表示上下排列；支持嵌套和同级空间比例 `weight`。省略 pane 名称时自动生成内部标识，目录相对项目根目录解析。完整格式见[项目配置](docs/configuration.md)。机器 API 的 layout 继续使用 split/panes；`edit --stdin` 接收 show 的 definition 对象。
+配置保存在项目所在机器的 `~/.config/tdev`，支持单文件、多项目及 include 拆分。
+手动分屏后运行 `save` 保存布局；更新后的启动配置在新建会话时生效。
+完整格式与客户端覆盖设置见[配置指南](docs/configuration.md)。
 
-使用分屏配置时，项目所在机器及编辑配置的客户端需支持 `pane-layout-v1`；远端写入会检查该能力。布局按可用单元格近似恢复。已有会话继续运行原布局，新建会话使用保存的配置。
+## 把服务和文件带到本机
 
-## 诊断日志
-
-失败操作自动写入当前配置根下的 `logs/diagnostics.jsonl`。默认路径为 `~/.config/tdev/logs/diagnostics.jsonl`；`XDG_CONFIG_HOME` 和 `--config-dir` 同时影响配置与日志位置。目录补全失败时，向导显示错误类别和日志路径。命令结束时，人类可读输出显示本次日志位置；`--json` 保持单一协议响应。
+临时访问远端服务：
 
 ```sh
-tdev --debug setup
-tail -n 30 ~/.config/tdev/logs/diagnostics.jsonl
+tdev forward dev -L 8080:localhost:8000  # 本机 8080 → 远端 8000，后台保留
+tdev forward ls                        # 查看项目映射、临时转发及其名称
+tdev stop dev/forward-NAME              # 使用列表中的名称停止
 ```
 
-`--debug` 额外记录成功的命令和 SSH/API 请求。每条 JSON 记录包含 UTC 时间、进程号、操作、服务器名称、耗时，以及失败时的错误码、原因类别和可用的进程退出码。日志仅保存已知错误类别，不保存命令参数、目录输入、环境变量、凭据或原始远端输出；未识别的原因记为 `operation_failed`，可结合操作和退出码定位。补全查询的独立时限为 3 秒，超时记为 `deadline_exceeded`。
+项目的固定转发通过 `edit` 保存，`open` 时启动。只需要服务时，可以使用
+`tdev open dev/demo --only forward`。转发默认监听回环地址。
 
-日志目录权限为 0700，文件为 0600。单文件上限为 1 MiB，保留三个轮转备份。日志写入失败保留原操作结果，人类可读输出提示日志不可用。
-
-## 构建与验证
-
-开发需要 Go 1.27，运行产物无需 Go。会话管理需要 tmux；纯客户端仅需 SSH。
+项目还可以声明 Web 域名，使用 `http://demo.localhost:17890` 访问本机或远端应用。
+Web 入口独立于终端持续运行，可用 `tdev web ls` 查看、`tdev web stop dev/demo` 停止。
+配置方式与 WebSocket 支持见[Web 服务转发](docs/web-services.md)。
 
 ```sh
-make build
-TDEV_REQUIRE_INTEGRATION=1 make test
-make check
-make cross
+tdev push dev/demo ./source ./destination  # 上传，相对远端路径以项目目录为基准
+tdev pull dev/demo ./result ./result       # 下载
+tdev open dev/demo --mount                 # 打开项目并挂载文件
+tdev unmount dev/demo                      # 卸载项目挂载
 ```
 
-构建生成 `bin/tdev`；跨平台二进制位于 `dist/`。这些是未签名开发产物。
-`make build` 和 `make cross` 自动生成形如 `0.8.0-git.1a2b3c4d5e6f` 的版本，
-有已跟踪文件改动或未忽略的新文件时追加 `.dirty`。匹配基础版本的 `v0.8.0` tag
-且工作树干净时使用 `0.8.0`；缺少 Git 提交信息时使用 `0.8.0-dev.unknown`。
-一次构建的四平台产物使用同一版本；`make release` 使用 `VERSION` 指定的正式版本。
-可运行 `./bin/tdev version` 查看版本，构建产物按需手动复制到目标机器。
-默认配置目录为 `${XDG_CONFIG_HOME:-$HOME/.config}/tdev`；`--config-dir` 可指定
-本机隔离目录。有 `config.yaml` 时读取主配置及其 include，否则读取 `projects/*.yaml`。每个文件可声明多个具名项目；配置和历史版本备份使用 0600 权限。详见[项目配置](docs/configuration.md)。
+覆盖已有文件时需要确认。挂载需要客户端安装 SSHFS，macOS 另需 macFUSE。
+传输规则、资源释放及平台限制见[使用指南](docs/usage.md#传输与挂载)。
 
-## 机器接口
-
-`tdev api` 供客户端在目标机器上执行，使用明确参数和结构化 stdin，无业务确认。`--json` 输出单一协议响应；session attach 要求终端和明确的会话身份。
+## 补全、AI 与升级
 
 ```sh
-./bin/tdev --json version
-./bin/tdev --json api version --require api-v1
-./bin/tdev --json api project list --status
-./bin/tdev --json api project create demo --directory /home/developer/projects/demo
-./bin/tdev --json api project get demo
-./bin/tdev --json api project set demo --stdin --expected-revision 3 < demo.json
-./bin/tdev --json api session ensure demo
-./bin/tdev --json api session save demo --expected-revision 3
+tdev completion install           # 配置当前 shell 的补全
+tdev skill install                # 检测并逐项确认安装 AI skill
+tdev upgrade                      # 验证签名并升级
+tdev upgrade --remote dev         # 升级已登记的远端
+tdev upgrade --rollback           # 回退到保留的旧版本
 ```
 
-项目定义统一通过 project get/set 读写。其他接口按 session、transfer、binary 和 mount-probe 分组。客户端每次 API 调用将版本查询、能力检查与操作合并为一次 SSH shell 调用，用随机分隔标记和独立退出码解析结果；能力检查通过后才执行操作。setup 的依赖与项目查询共享一次连接。旧服务端提示升级：
+内置 skill 支持 Codex、Claude Code 和 Pi，安装前逐项确认。
+自动化可使用 `--json` 获取结构化响应；目标机器接口见[机器接口](docs/api.md)。
+安装、升级及回滚的兼容要求见[安装指南](docs/installation.md)。
+
+## 文档
+
+| 想了解什么 | 文档 |
+| --- | --- |
+| 项目、会话、转发、文件与诊断命令 | [使用指南](docs/usage.md) |
+| YAML、分屏、客户端覆盖与重连偏好 | [配置指南](docs/configuration.md) |
+| 安装、补全、AI skill、升级与回滚 | [安装指南](docs/installation.md) |
+| 本地域名与远端 Web 服务 | [Web 服务转发](docs/web-services.md) |
+| 后台连接、资源生命周期与恢复 | [连接管理](docs/ssh-connection-reuse.md) |
+| 终端标题与未读提醒 | [终端提醒](docs/tmux-client-title.md) |
+| 设计、实现取舍与验证范围 | [设计](docs/design.md) · [开发记录](docs/development.md) · [验收记录](docs/acceptance.md) |
+| 版本变更与签名发布 | [发布说明](docs/releases/) · [GitHub](docs/github-release.md) · [GitLab](docs/gitlab-release.md) |
+
+## 参与开发
+
+需要 Go 1.27；真实集成测试需要 tmux、OpenSSH 等依赖，测试使用隔离配置与临时身份。
 
 ```sh
-tdev upgrade --remote dev
+make build                              # 生成 bin/tdev
+TDEV_REQUIRE_INTEGRATION=1 make test     # 竞态测试，要求集成依赖齐全
+make check                              # 静态检查和格式检查
+make cross                              # 构建四平台开发二进制
 ```
 
-`--ssh-config` 与 `--yes` 属于用户命令；`--config-dir`、`--timeout` 和 `--json` 两层共用。API 参数和配置错误与 SSH 连接错误分别报告。
-
-## 从客户端连接
-
-运行连接向导，自动读取已登记的服务器、SSH `Host` 和 `Include` 文件；可以选择、搜索，或直接填写 `user@host:port`。向导验证连接后列出远端已有项目，保留已有配置，并可调整这些项目在本机使用的端口。远端缺少 tdev 时可确认安装官方签名版本；缺少 tmux 时提示先准备依赖。
-
-```sh
-tdev setup
-tdev ls
-tdev open my-awsome-project
-```
-
-已有服务器再次运行向导时，保留其连接信息、远端配置目录及本机偏好。新增主机使用私有 SSH profile，引用现有身份和 SSH 配置。参数形式继续供脚本使用：
-
-```sh
-tdev setup --name research --ssh-alias my-existing-alias --remote-binary .local/bin/tdev
-# 或提供主机信息，使用现有 identity/SSH agent
-tdev setup --name research --host server.example.invalid --port 22 --user developer \
-  --identity-file ~/.ssh/existing-key
-tdev ls
-tdev open demo
-tdev open research/demo --reconnect-attempts 5 --reconnect-interval 2s
-tdev sh demo --save
-tdev save demo
-tdev stop demo -y
-```
-
-没有项目参数的 `save`、`sh`、`stop` 在本机 tmux 中依据项目标记推断，询问确认
-后操作本机会话，不回连服务器。支持 `-y` 和 `yes | tdev save`。显式 stop 会提示
-其他客户端断开；项目启动定义继续保留。
-
-`open` 将终端文件描述符直接交给系统 SSH。正常 detach 后退出，不重建会话；
-重连检查 session ID 和 generation，原会话消失后结束，不进入替代会话。
-`--reconnect-attempts` 支持 `0`、非负整数和 `always`；数值是初次连接之外的重试次数。
-等待和连接期间 Ctrl-C 退出；已连接时键盘 Ctrl-C 仍交给远端应用。
-
-主配置的 `client` 块支持连接、override 和全局 reconnect/SSH 偏好；`client.include` 可拆分文件。旧客户端配置在首次保存时备份迁移，完整格式见[配置指南](docs/configuration.md)。支持每台服务器的 reconnect 覆盖。
-优先级为命令参数、服务器覆盖、全局设置。setup 也提供
-`--terminal-reconnect-attempts`、`--terminal-reconnect-interval` 及对应 forward 参数。
-
-```yaml
-client:
-  reconnect:
-    terminal: {attempts: 5, interval: 2s}
-    forward: {attempts: 5, interval: 2s}
-    http: {attempts: always, interval: 5s} # 为后续 HTTP 功能保留
-  ssh:
-    connect_timeout: 10s
-    server_alive_interval: 15s
-    server_alive_count_max: 3
-```
-
-项目标识仍使用设计中的 ASCII slug；目录、窗口显示名、命令和文件名支持 UTF-8/CJK。
-不会为了诊断而将用户 locale 改成 C。tmux 查询使用 `-u`，避免 C locale 下将 CJK 或
-机器接口分隔符替换成下划线。无效 UTF-8 和路径中的控制字符会明确报错。
-
-## 转发
-
-`ls`、`open` 每次读取远端最新配置，再合并本机 `client.overrides`。调整本机端口可在向导中完成，也可以使用：
-
-```sh
-tdev override demo                       # 查看远端与合并后的配置
-tdev override demo --forward api --local-port 8080
-tdev override demo --reset               # 恢复远端默认值
-```
-
-`api` 可由项目文件中端口的 `name` 指定，也是机器定义中的稳定 ID，可从 `tdev show` 查看。项目目录、窗口和命令实时读取，本机只保存端口差异及附加转发。
-
-```sh
-tdev forward dev -L 3000:localhost:8000          # 等监听就绪后返回，后台保留
-tdev forward dev -R 9000:localhost:3000
-tdev forward dev -L 8000 --foreground          # 前台运行，Ctrl-C 释放
-tdev forward local -L 8080:localhost:8000       # 本机 TCP 转发
-tdev ls --type forward
-tdev stop dev/forward-NAME -y                  # 使用 ls 中的名称
-tdev edit dev/demo                            # 修改项目保存的转发
-tdev open dev/demo --only forward              # 后台运行项目预设
-```
-
-与 OpenSSH 一致，`-L` 本机监听、`-R` 远端监听，均为
-`[bind_address:]port:host:hostport`。支持 `port:port`、`port` 及方括号 IPv6。
-默认绑定回环地址，不接管已有连接。反向映射将流量送到建立连接的客户端，多客户端可能争用远端监听。
-
-每条映射拥有独立 SSH master 和私有控制 socket；通过 OpenSSH 控制请求确认监听
-建立后才报告 ready。端口冲突不接管其他连接，失败和重连互相隔离。
-`forward [server]` 要求显式提供至少一条 `-L/-R`，按 server 解析参数。省略 server 时，配置了远端的交互终端提供选择；非交互调用需显式指定。只有本机时默认 local。每次运行生成 `forward-…` 名称，多条规则组成一组，在 `ls` 中以 forward 类型列出，可通过 `stop server/name` 整组停止。临时规则保存在当前客户端的 daemon 恢复登记中。项目共享规则由 `edit` 修改，`override` 调整当前客户端的监听偏好。
-
-默认 forward 等监听建立成功后返回，由 daemon 后台维持；`--foreground` 持有使用权直到命令退出，Ctrl-C 释放本次转发。启动批次中任何规则失败时清理整组。`daemon restart` 恢复后台转发，`daemon stop` 清除恢复登记。临时转发在当前客户端的 `ls` 和 `daemon status` 中可见。open 带 shell 时按使用权释放转发，只选 forward 时后台保留。
-ready 表示 SSH 监听已建立；应用健康由应用自身检查。
-
-## 传输与挂载
-
-```sh
-tdev push demo ./source ./destination
-tdev pull demo ./remote-source ./local-destination
-tdev open dev/demo --mount        # 打开时显式挂载
-tdev mount dev/demo ./empty-mountpoint
-tdev unmount dev/demo ./empty-mountpoint
-```
-
-远端相对路径以项目根目录为基准；本地相对路径以 cwd 为基准。单文件目标为已有目录（例如 `./`）时，保存为该目录下的源文件名；指定目标文件名时按该名称保存。目录传输将源目录
-内容合并进指定目标目录，不因目标是否存在而增加一层目录，不删除目标的其他文件。
-覆盖已有文件需确认或 `-y`。传输使用系统 scp/SFTP、编号暂存文件、SHA-256 校验和
-逐文件原子替换；提交前检查目标是否变化。目录按文件提交，部分失败时报告已提交进度。
-第一版拒绝符号链接和设备文件；Mac 目标会在写入前拒绝大小写或 Unicode 规范化重名。
-
-open 默认只进入终端并建立转发。显式 `--mount` 或独立 mount 才挂载，路径保存为本机 override，可通过 `override --mount-path` 配置。再次 mount 可省略路径。带 shell 的 open 在退出时释放本次新建挂载；已有挂载、其他窗口所需挂载和独立 mount 继续保留，通过 unmount 显式释放。本机项目的 mount 返回已有项目目录。
-
-挂载检查目录内容、实际来源和文件系统 ID；复用正确来源，不覆盖其他挂载。
-外部已有挂载可以复用，但不会被自动接管。unmount 使用本地记录，断网时也可操作；
-身份不符或 busy 时拒绝，不强制卸载，也不按单独 PID 杀进程。
-
-SSHFS 以独立前台进程运行，避免当前 macFUSE 的后台 fork 问题；mount 命令退出后
-文件系统继续运行，诊断位于私有日志。Mac 使用 noappledouble/noapplexattr 和 iconv
-文件名转换，并通过远端独立检查验证 CJK 文件名及元数据防护；验证需要项目根目录可写。
-Mac 挂载按 NFC 远端文件名工作，混合 NFC/NFD 名称仍受 SSHFS/macFUSE 限制，不会自动
-重命名远端文件。详见[验收边界](docs/acceptance.md#尚未完成的环境或人工验收)。
-
-## 安装、升级和回滚
-
-GitHub 自动发布见 [GitHub Actions 发布配置](docs/github-release.md)，支持版本标签触发和补发已有标签。
-
-GitLab 自动发布见 [GitLab CI 发布配置](docs/gitlab-release.md)。配置签名文件变量和受保护的 `v*` tag 后，推送版本 tag 即可运行测试、构建四平台签名包并创建 GitLab Release。GitLab 安装脚本会保存当前项目作为后续升级来源。
-
-构建机器可以用既有外部 PKCS8 Ed25519 密钥生成四平台二进制、压缩包、签名清单和校验表：
-
-```sh
-TDEV_SIGNING_KEY=/secure/external/release-key.pem make release VERSION=0.0.1
-```
-
-首次安装应从独立可信渠道确认公钥，再通过 `--public-key` 指定。
-离线安装示例：
-
-```sh
-sh scripts/install.sh --release-dir ./verified-release --public-key /trusted/release.pem
-tdev upgrade --release-dir ./verified-next-release
-tdev upgrade --rollback
-
-# 从客户端安装远端，无需远端访问发布网站
-tdev setup --name research --ssh-alias my-existing-alias --install \
-  --release-dir ./verified-release --public-key /trusted/release.pem
-tdev upgrade --remote research --release-dir ./verified-next-release
-tdev upgrade --remote research --rollback
-```
-
-也可使用指向特定版本目录的 `--release-url https://…`，以及 `--version` 校验期望版本。
-HTTPS 源地址和公钥会保存在安装 receipt 中，后续升级可复用。离线源需再次显式指定目录。
-bootstrap 脚本需要 OpenSSL 3+（可通过 `OPENSSL` 指定路径），在线源另需 curl；运行二进制
-无需 Go/Node/Python。远端 bootstrap 校验使用 sha256sum 或 shasum，安装及传输需可批模式
-认证的 SSH 身份。缺少 tmux 时给出错误，不自动 sudo 安装。
-
-升级先验证签名、SHA-256、候选版本与协议，再备份并原子替换，不停止 tmux。
-备份和安装 receipt 保留在二进制旁；rollback 校验当前文件和备份身份后恢复。
-包管理器等非 tdev 管理的二进制不会被默认 upgrade 覆盖。
-
-## 后续范围
-
-HTTP `*.localhost` 代理属于后续版本。
+开发构建自动包含 Git revision 和工作区状态；签名发布使用指定版本。
+开发约束见 [AGENTS.md](AGENTS.md)，实现与验证记录见 [docs/](docs/development.md)。

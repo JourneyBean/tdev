@@ -312,3 +312,36 @@ client:
 		t.Fatalf("lost unbound preferences: %+v", o)
 	}
 }
+
+func TestHTTPClientIncludeAndWriteback(t *testing.T) {
+	root := t.TempDir()
+	clientConfigFile(t, root, "config.yaml", "client:\n  include: [client-prefs.yaml]\n")
+	clientConfigFile(t, root, "client-prefs.yaml", "http:\n  port: 17891\n")
+	a := &app{store: config.Store{Root: root}}
+	p, err := a.prefs()
+	if err != nil || p.HTTP.Port != 17891 {
+		t.Fatalf("HTTP prefs: %+v %v", p.HTTP, err)
+	}
+	p.HTTP.Port = 17892
+	old, err := a.readClientState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = a.writeClientState(context.Background(), old, p, old.overrides); err != nil {
+		t.Fatal(err)
+	}
+	p, err = a.prefs()
+	if err != nil || p.HTTP.Port != 17892 {
+		t.Fatalf("HTTP writeback: %+v %v", p.HTTP, err)
+	}
+	b, err := os.ReadFile(filepath.Join(root, "client-prefs.yaml"))
+	if err != nil || !strings.Contains(string(b), "17892") {
+		t.Fatalf("include writeback: %s %v", b, err)
+	}
+	for _, port := range []string{"0", "65536", "-1"} {
+		clientConfigFile(t, root, "client-prefs.yaml", "http:\n  port: "+port+"\n")
+		if _, err = a.prefs(); err == nil {
+			t.Errorf("accepted HTTP port %s", port)
+		}
+	}
+}

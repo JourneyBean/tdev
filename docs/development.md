@@ -2,7 +2,7 @@
 
 ## 开发构建版本
 
-当前基础版本为 0.8.0，源码默认值与 Makefile 同步，变更见 [v0.8.0 发布说明](releases/v0.8.0.md)。
+当前基础版本为 0.9.0，源码默认值与 Makefile 同步，变更见 [v0.9.0 发布说明](releases/v0.9.0.md)。
 
 Makefile 保留 VERSION 作为发布基础版本，普通 build/cross 在 make 启动时计算一次 BUILD_VERSION，
 通过现有 ldflags 注入 CLI。开发版本使用 `<基础版本>-git.<12 位提交哈希>[.dirty]`，
@@ -25,7 +25,7 @@ tmux 停止最后一个会话后，旧版服务退出期间可能成功返回空
 
 本地 daemon 通过私有 Unix socket 管理控制连接、后台转发及 SSHFS 启动。API、completion 与交互终端共享控制 master；转发、scp 和 SSHFS 使用独立传输。daemon 生命周期锁、逐目标获取锁及独立代次 socket 协调多进程和重连；首次交互认证在调用终端完成，后台使用 BatchMode。
 
-默认 open 的附属资源随 shell 退出释放；多个窗口共享使用权，最后一个退出才清理临时资源。显式服务模式 `open --only forward/sshfs` 后台保留。存续请求断开会回收异常退出客户端的使用权；挂载沿用身份核对与安全卸载。daemon restart 恢复后台转发和活跃 open 的使用权；stop 保持停止，start 恢复。后续 web 功能保留入口并在执行前报告尚未实现。行为、隐私边界及运维细节见 [本地 daemon 与 SSH 连接管理](ssh-connection-reuse.md)。
+默认 open 的附属资源随 shell 退出释放；多个窗口共享使用权，最后一个退出才清理临时资源。显式服务模式 `open --only forward/sshfs` 后台保留。存续请求断开会回收异常退出客户端的使用权；挂载沿用身份核对与安全卸载。daemon restart 恢复后台转发和活跃 open 的使用权；stop 保持停止，start 恢复。Web 代理与隧道独立后台保留，按 HTTP 策略重连。行为、隐私边界及运维细节见 [本地 daemon 与 SSH 连接管理](ssh-connection-reuse.md)。
 
 `upgrade` 及其回滚在确认和替换前向 stderr 提示映射可能短暂中断，并给出自动重连与重新 open 的恢复方式；`--json` 的 stdout 保留单个协议响应，`-y` 保留升级提示。本地原位替换成功后使用目标二进制刷新当前配置根的运行中 daemon，后台转发从登记恢复，活跃 open 重新持有使用权并附着原会话。刷新在生命周期锁内检查运行状态，与 stop 串行化；已停止的 daemon、相同内容的重复升级、签名失败和取消操作保留原运行状态。更新其他目标路径时，由该安装实例自行管理 daemon。二进制已提交而 daemon 刷新失败时返回 PARTIAL_SUCCESS，保留安装收据并提示手动 restart。
 
@@ -33,7 +33,7 @@ tmux 停止最后一个会话后，旧版服务退出期间可能成功返回空
 
 已成功建立过的 R 映射在断线重连时，旧远端 SSH 连接可能仍占用监听端口。此时 remote port forwarding failed 按原转发重连预算继续等待；首次创建的端口冲突仍立即失败。恢复过程通过新连接重新绑定，保留其他使用者的监听。
 
-Last verified: 2026-11-15。基础版本：0.8.0。历史集成验收使用开发版版本号，见验收记录。
+Last verified: 2026-11-17。基础版本：0.9.0。历史集成验收使用开发版版本号，见验收记录。
 
 v0.5.0 汇总本地连接监督、open 功能选择、tmux 标题提醒、升级连接恢复与 ps 快照。源码默认值与 Makefile 统一为 0.5.0，机器协议与配置 schema 保持为 1，新增 ps-v1 能力，沿用现有安装签名公钥。GitHub/GitLab 的完整竞态测试超时统一为 300 秒，覆盖新增的真实签名升级与双向映射恢复用例。
 
@@ -190,7 +190,7 @@ create、open 缺失项目和 edit 使用同一份草稿向导。目录、窗口
 项目配置、窗口与保存转发定义、tmux 会话、setup、ls、open、save、sh、stop、
 forward、push/pull、mount/unmount、doctor、install/upgrade/rollback 已提供实际实现。
 远端通过按需启动的 CLI/attach 进程管理配置与会话。
-HTTP 域名代理仍属于后续版本。
+HTTP 域名代理的配置、独立使用权和停止行为见 [Web 服务转发](web-services.md)。
 
 项目文件采用具名项目声明，支持 config.yaml 主配置及 include；无主配置时扫描 projects/*.yaml。手写格式与机器 API 模型分离，解析拒绝重复 key、未知字段、多文档和 YAML 别名。
 修改持有项目锁与配置根共享锁，比较内部 revision、检查源文件内容，保留完整源文件备份后原子写入；配置默认 0600。
@@ -368,3 +368,92 @@ config.ClientDocument 汇总主配置和客户端片段，并记录每个服务�
 新声明通过 server/project 和端口名称引用资源。首次成功合并校验后持锁绑定 UUID；绑定不同的同名项目拒绝应用，reset 删除声明与绑定。自动标识和绑定保持在 state/client-bindings.json，未绑定的声明可提前写入配置；校验失败保持未绑定。挂载单独校验身份，已有有效配置在 daemon 路径中保持原语义。
 
 旧客户端配置在没有新 client 块时读取。首次保存把全部旧设置迁入新块并将 UUID 转入内部绑定，原文件和 .legacy.bak 保留回退；新块存在后使用新配置来源。客户端配置与绑定分别提交，绑定写入失败通过 PARTIAL_SUCCESS 报告。并发与平台覆盖边界见[验收记录](acceptance.md)。
+
+
+## HTTP 域名转发（2026-11-16）
+
+项目模型和声明格式增加可选 `http`，保留既有 schema 与无 HTTP 项目的序列化。
+字段随项目 API、源文件写回和 revision 校验传递；客户端独立配置 `http.port`，支持
+include 来源和默认值省略。项目持有服务目标和域名，临时隧道监听仅在客户端内存中分配。
+
+本地 daemon 复用现有私有控制接口和恢复登记，Web 路由独立于 shell lease 持久保留。
+注册串行化，先验证全组域名冲突和代理端口，再创建路由；同定义复用，手动 open
+可补齐自动启动跳过的服务，改变已有目标要求 stop/open。停止先移除恢复登记，
+关闭该项目连接、隧道，最后一个路由释放代理端口。启动时异步重新读取项目自动策略，
+监听失败和发现错误通过 warning 报告。
+
+代理使用标准库 ReverseProxy，限制回环 IPv4 监听和 *.localhost Host，拒绝 CONNECT
+和绝对请求目标。Rewrite 保留应用 Host，重建转发头，流式响应立即 flush。
+每条远端路由通过已有 forward.Group 独立持有 OpenSSH master 和动态本地 TCP 监听，
+复用 HTTP 重连预算及认证错误分类。监听预分配与 SSH 绑定之间的端口竞争通过 SSH
+确认结果报告失败；只有已绑定的隧道进入 ready。隧道不可用和上游连接失败返回 503，
+应用 5xx 原样返回。停止跟踪的上游 TCP 连接使已升级 WebSocket 一并退出。
+状态和 ps 展示声明、路由与传输状态，请求头、URL 路径和正文不写入日志。
+
+## README 与使用文档
+
+README 面向首次接触项目的用户，以使用场景和亮点开篇，按安装、快速开始、日常操作与文档导航组织。保留常用命令和最小配置示例，详细项目与会话操作、连接偏好、传输和诊断集中于 `docs/usage.md`，目标机器接口集中于 `docs/api.md`。安装、配置、Web 与连接生命周期继续由各专题文档说明。
+
+
+## Web 服务默认自动启动（2026-11-16）
+
+`http[].autostart` 为可选布尔值，省略和 true 均允许自动启动，false 保留手动 open。
+机器模型使用可选字段兼容旧 API 的缺省响应，源文件写回保留显式值。路由比较仅使用
+实际端点，省略与显式布尔值以及 JSON 解码后的指针身份保持重复 open 的幂等性。
+手动 open 可补齐自动启动时跳过的服务；修改已有目标仍需 stop/open。
+
+CLI daemon 提供独立的发现回调，本地监听就绪与后台项目发现并发运行。每个已配置
+服务器和本机独立读取项目；远端通过非交互的共享控制 master 调用 project list，
+沿用 API gate、SSH 配置、连接超时和诊断隐私规则。发现失败使用该服务器的 HTTP
+重连预算，永久认证或配置错误停止重试。当前错误进入 daemon status/inspect 的
+warnings，发现恢复后清除临时告警。发现成功后，本轮后续恢复由已有隧道重连承担。
+
+自动启动服务由当前项目配置驱动，启动时重新发现；生产 CLI 的旧 Web 恢复快照在
+加载时清除，避免历史手动 open 或旧策略覆盖当前 false。显式打开仍登记当前服务，
+同时防止稍后完成的自动发现缩减其路由集合。web stop 与登记串行化，并为该项目
+记录仅本代 daemon 有效的停止标记，覆盖发现仍在进行的时序。daemon stop 保留原有
+停止标记和启动锁行为；每次显式 start/restart 重新判断自动策略。应用进程和操作系统
+登录启动项保持各自的管理方式。
+
+## 工作项、资源与连接列表（2026-11-17）
+
+`ls` 按工作项汇总运行中的项目、scratch 和临时转发组；项目只启用转发、Web 或
+挂载时也进入概览。`project ls` 展示全部定义，`session ls` 每行一个真实 session，
+`forward ls` 每行一条 TCP 映射，`web ls` 每行一条路由。
+`--include-inactive` 控制未启动项，`--all` 保持查询全部服务器的原有含义。
+文本与 JSON items 使用相同渲染数据；JSON 原始发现数组保留完整配置和状态。
+健康状态在展示层统一为 running，协议中的原始 ready 等状态保持兼容。
+
+`connection ls` 和 `ps` 共享执行入口与输出模型，每个实际 master 只列一行并合并
+资源引用；本机 TCP/Web 按承载 daemon 进程合并，SSHFS 使用独立 helper PID。
+SERVER 是进程所在的观测机器，资源引用使用目标服务器限定的名称。
+`--verbose` 保留逐 daemon、socket、分配和通道诊断。连接 ID 来自实际 socket 与 PID
+的摘要，宽资源表复用相同算法，保持共享、替换和归属的含义一致。
+
+新增 ResourceRef 只记录服务器、工作项、资源类型及服务标识。
+项目 TCP 在启动时登记引用，共享监听按前台 owner 或后台登记保存所有使用者；
+前台释放清除对应引用，后台多项目引用随已有恢复登记重建。
+Web 快照携带路由归属与实际目标，声明变化后仍能展示旧运行端点。
+终端 allocation 增加服务器和 scratch 标识，tmux 会话快照增加实际附着客户端数。
+宽表读取已有 daemon 的 inspect，服务查询保持生命周期操作独立。
+
+## 内置 AI skill 与命令职责（2026-11-17）
+
+内置 tdev skill 按工作项、项目定义、会话、TCP、Web、连接选择查询入口。
+结构化调用读取 items 或 connections，原始快照用于诊断，保留观察机器与目标服务器
+的区分。操作说明补齐 Web 生命周期、复合 open、后台转发与会话停止的边界，
+传输示例使用当前 push/pull；分发继续由已有嵌入与受管理文件校验机制完成。
+命令核对使用实际 CLI 的逐级 help，并补充隐藏的 daemon serve 内部入口。
+
+## v0.9.0 升级兼容（2026-11-17）
+
+HTTP 为可选字段，客户端缺省代理端口由读取默认值提供；已有配置按原有首次保存流程
+备份迁移。此次沿用项目/机器 schema 1 和 tmux runtime 2，新增客户端数属于只读快照。
+post-install 保持 tmux-runtime、daemon-refresh、ai-skills 的原有顺序。
+真实 v0.8.0 二进制的跨版本验收保留配置字节、UUID/revision、session/generation、
+pane/PID，并恢复已有 TCP 监听和受管理 skill；停止标记在刷新后继续生效。
+
+旧 TCP 恢复登记的资源引用缺省合法。恢复保留原请求键、监听和临时组身份，项目来源
+缺失时维持未知；显式 open --only forward 复用已有监听并写入归属，避免按当前配置
+猜测历史项目身份。HTTP 项目涉及旧程序不认识的新字段，回滚配置沿用兼容备份策略。
+稳定版使用 v0.9.0 标签与现有签名 CI 发布，沿用安装信任公钥。
