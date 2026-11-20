@@ -1,8 +1,57 @@
 # 开发验收记录
 
-Last verified: 2026-11-17。源码基础版本：0.9.0。下表保留集成验收使用的开发版版本号。
+最近验证：2026-11-20。源码基础版本：0.10.0。
 
 本记录汇总第一版核心功能的自动化验证、环境实测和待验证项。
+
+## v0.10.0 发布验收（2026-11-20）
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 420s ./...` 通过。CLI 用时
+239.378 秒，覆盖真实 OpenSSH 与 PTY、远端 Web 路由和工作项列表。真实 tmux 3.6
+测试用时 13.846 秒，使用私有 socket 和 `/dev/null` 配置，覆盖会话归属、分屏和
+服务退出。原生环境为 Linux amd64。macOS 覆盖交叉构建，浏览器证书信任与 DNS 解析
+保留为客户端验收。
+
+`make check` 通过，包含 `go vet ./...`、`gofmt -l cmd internal` 和
+`git diff --check`。`make cross` 通过 Linux 和 macOS 的 amd64、arm64 构建，
+四个产物的 Go 构建信息均与对应平台一致。
+
+## 内置 AI skill 精简（2026-11-19）
+
+对照当前构建的逐级 `--help`，核对列表范围、编辑参数、工作区功能选择和 API 入口。
+Skill 格式校验通过，临时构建的 `--json skill show` 内容与源码和 SHA-256 标记一致。
+Linux 隔离 OpenSSH 和真实 tmux 集成通过，覆盖跨服务器的工作项和会话查询；
+Skill 安装测试覆盖暂存目录安装、人工编辑冲突和终端的逐项授权。
+`go test -race ./...` 通过（CLI 230.432 秒），`go vet ./...`、gofmt 和 `git diff --check` 通过。
+这些验证覆盖 CLI 和分发，模型的自动发现与触发仍需在实际 agent 会话中验收。
+
+## 工作项概览 `ls --all`（2026-11-18）
+
+Linux 的真实 OpenSSH 和私有 tmux 集成测试 `TestListProjectsAcrossServers` 通过。
+JSON 核对默认活跃视图、`--all` 与 `--include-inactive` 的未启动项，以及 `session ls --all`
+的服务器筛选行为。文本核对 `ls --all --server` 只展示指定服务器的未启动项目。
+测试使用本机及两个远端配置，覆盖空远端和未托管会话；验收范围为 Linux。
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -timeout 420s ./...` 通过，CLI 用时 230.191 秒。
+真实 tmux 测试独立重跑通过（13.219 秒），`make check` 通过。
+
+补充验收使用仅含 `ssh` 的客户端 PATH。`ls` 在空配置和已配置项目的场景下均返回 0。
+`ls --all` 显示本地未启动项目，默认视图省略该项目。远端使用真实 OpenSSH 和 tmux，
+两种视图均保留运行中的远端项目。远端配置损坏时仍返回 9 并保留缓存。
+补充验收后全量竞态测试通过，CLI 用时 227.633 秒。
+
+## SSH 密码认证与连接复用（2026-11-18）
+
+在隔离 Linux 容器中使用真实 OpenSSH、PTY 和私有 tmux socket。服务端只允许密码认证并启用 SFTP。
+首次 setup 从本地签名发布包安装远端二进制，整个流程一次密码提示、一次 SSH 登录。
+清除连接后，项目列表显示 unauthorized。一次 open 登录同时验证本地和远端 TCP 转发及 Web 的实际响应，已认证连接上的列表刷新成功。
+分离终端后 Web 保持运行。主动断开主连接后 Web 显示 unauthorized，再次 open 输入一次密码后恢复。
+客户端配置及 daemon 恢复登记未发现测试密码。停止 Web 路由和并发查询 daemon 状态均完成。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race -count=1 -timeout 420s ./...` 通过，含 CLI 232.038 秒、daemon 6.441 秒和真实 tmux 13.884 秒。
+竞态集成覆盖首次上传连接计数、多个 PTY 附着共享项目转发、签名升级和回滚、断线恢复，以及 Web 和 SSH 独立资源的生命周期。
+故障代理现在双向断开 SSH，确保空闲远端连接释放反向监听。签名升级与反向转发恢复专项连续两轮通过。
+`go vet ./...`、gofmt、`git diff --check` 与 Linux/macOS amd64/arm64 的 `make cross` 通过。
+容器使用本地签名包。macOS 原生交互、SSHFS 和具名临时转发的密码登录未执行。
 
 ## v0.9.0 发布前迁移验收（2026-11-17）
 
@@ -680,9 +729,72 @@ README 从 395 行整理为 154 行，补充项目亮点、快速开始和文档
 5 个 Warp 官方页面的来源快照与源码审阅记录已保留。Linux tmux 3.6 下
 `go test -race ./internal/cli -run '^TestAlertTitlesThroughAttach$/^local$' -count=1 -v`
 通过，使用独立临时 socket、配置与真实 PTY，覆盖原有本机附着标题与终端行为。
-日志位于 `.summary-web/studies/warp-directory/evidence/tmux-integration.log`。
 
 本轮为文档调研，产品代码未变，未执行全套测试或交叉构建。Warp GUI、SSH extension
 握手、自定义 Added commands、OSC 7、真实 SSHFS 文件树、目录跟随及多 pane/重连行为
 仍需人工验收。本机 tmux 回归通过仅提供已有附着行为的证据。方案见
 [Warp 目录同步调研](warp-directory-integration.md)。
+
+## Web 域名默认后缀
+
+在 Linux 上，Web 集成验证短主机名默认展开为 `*.tdev.localhost`、自定义后缀、
+已有完整 `*.localhost` 域名、展开后的同名冲突、配置 include 写回，以及
+`show`、手动打开、自动启动和已停用路由列表。真实 OpenSSH 集成覆盖客户端为远端
+项目展开域名并代理 HTTP 请求。HTTP 集成直接向回环代理发送 Host，浏览器解析和
+自定义 DNS 配置留待实际客户端验证。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race ./...` 通过。补充远端短主机名和 `show`
+断言后，Web 与 HTTP 客户端专项通过。使用独立 socket 的真实 tmux 3.6 竞态复测通过
+（13.679 秒）。`go vet ./...`、`gofmt -l cmd internal` 和 `git diff --check` 通过。
+`make cross` 在临时目录通过 Linux、macOS 的 amd64 和 arm64 构建，macOS 覆盖限于交叉构建。
+
+## Web HTTPS 入口与上游
+
+回环集成通过独立端口访问 HTTP 和 HTTPS，校验代理自签证书的域名及签名、
+`X-Forwarded-Proto`、HTTP 请求误入 TLS 端口的处理，以及关闭最后一条路由后的
+双端口释放。HTTPS 端口被占用时，已绑定的 HTTP 端口释放且路由登记未生效。
+配置测试覆盖自定义 HTTPS 端口、非法值、重复端口以及 HTTP 占用默认 HTTPS 端口时的回退。
+
+四种 `ws` / `wss` 入口与上游组合均通过真实帧往返和停止路由后的连接关闭验证。
+真实 OpenSSH 集成验证远端 HTTPS 上游、SNI、离线恢复和重复打开。浏览器证书信任
+界面与系统 DNS 解析留待客户端验收。
+
+独立 socket 的真实 tmux 3.6 竞态测试通过（13.322 秒）。`go vet ./...`、
+`gofmt -l cmd internal` 和 `git diff --check` 通过。`make cross` 通过 Linux、macOS 的
+amd64 和 arm64 构建，macOS 覆盖限于交叉构建。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race ./...` 通过。
+
+## Web 代理默认端口调整
+
+使用临时配置和新构建的 CLI，通过实际 HTTP 和 HTTPS 请求验证缺省地址分别监听
+24880 和 24881。客户端配置测试验证显式旧 HTTP 端口和自定义 HTTPS 端口优先，
+并覆盖 HTTP 使用 24881 时自动选用 HTTPS 24880 的行为。独立 socket 的真实 tmux
+3.6 竞态测试通过（13.480 秒）。`go vet ./...`、`gofmt -l cmd internal` 和
+`git diff --check` 通过。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race ./...` 通过。
+
+## Web 配置向导
+
+真实 PTY 通过三轮专项测试。客户端向导校验 HTTP 和 HTTPS 端口冲突，将域名后缀
+和端口写回 `client.include` 原文件。项目向导通过选择菜单新增路由，并通过显式
+`local/demo` 编辑路由。验证了主机名与 IPv6 上游、HTTP 和 HTTPS、自动启动以及
+其他项目字段保留。无交互终端的调用返回配置错误。
+
+真实 OpenSSH 和 PTY 验证远端项目路由写入项目所在机器。项目在确认前被其他操作
+修改时，旧 revision 被拒绝，新配置和无冲突的重试均保存成功。独立 socket 的真实
+tmux 3.6 竞态测试通过（13.571 秒）。`go vet ./...`、`gofmt -l cmd internal` 和
+`git diff --check` 通过。`make cross` 通过 Linux、macOS 的 amd64 和 arm64 构建。
+PTY 与 OpenSSH 交互测试覆盖 Linux。
+
+最终版本的 `TDEV_REQUIRE_INTEGRATION=1 go test -race ./...` 通过。
+
+## Web 路由删除
+
+真实 PTY 连续三轮验证删除确认。直接回车取消后保留路由和 revision，确认后只删除
+选中路由，保留其余路由和项目字段。删除最后一条路由后，项目可正常读取。
+独立 socket 的真实 tmux 3.6 竞态测试通过（13.919 秒）。`go vet ./...`、
+`gofmt -l cmd internal` 和 `git diff --check` 通过。
+
+`TDEV_REQUIRE_INTEGRATION=1 go test -race ./...` 通过。

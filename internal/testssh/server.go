@@ -169,7 +169,13 @@ func (s *Server) proxy(destination string) {
 			}
 			defer remote.Close()
 			done := make(chan struct{}, 1)
-			go func() { _, _ = io.Copy(remote, client); done <- struct{}{} }()
+			go func() {
+				_, _ = io.Copy(remote, client)
+				// An idle SSH server may never write after the proxy's client
+				// closes. Close upstream too so Offline drops its listeners.
+				_ = remote.Close()
+				done <- struct{}{}
+			}()
 			_, _ = io.Copy(client, remote)
 			_ = client.Close()
 			_ = remote.Close()

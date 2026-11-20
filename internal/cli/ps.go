@@ -12,6 +12,7 @@ import (
 	"tdev/internal/config"
 	"tdev/internal/daemon"
 	"tdev/internal/protocol"
+	"tdev/internal/sshx"
 )
 
 type processHost struct {
@@ -112,6 +113,9 @@ func (a *app) processes(ctx context.Context, selected string) (processListing, e
 				row.State = "error"
 				if row.Error.Code == "CONNECTION_FAILED" {
 					row.State = "unreachable"
+				}
+				if row.Error.Code == sshx.AuthRequired {
+					row.State = "unauthorized"
 				}
 				if row.Error.Code == "PROTOCOL_INCOMPATIBLE" {
 					row.State = "upgrade-required"

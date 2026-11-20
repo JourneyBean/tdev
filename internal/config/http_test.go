@@ -42,6 +42,20 @@ func TestHTTPValidation(t *testing.T) {
 	if err := ValidateHTTP([]HTTPService{h, h}); err == nil {
 		t.Fatal("accepted duplicates")
 	}
+	explicitHTTP := h
+	explicitHTTP.TargetScheme = "http"
+	if !h.SameRoute(explicitHTTP) {
+		t.Fatal("explicit HTTP did not match the default route")
+	}
+	https := h
+	https.TargetScheme = "https"
+	if err := ValidateHTTP([]HTTPService{https}); err != nil || h.SameRoute(https) {
+		t.Fatalf("HTTPS should be a valid, distinct route: %v", err)
+	}
+	https.TargetScheme = "wss"
+	if err := ValidateHTTP([]HTTPService{https}); err == nil {
+		t.Fatal("accepted wss as target_scheme")
+	}
 	h.TargetPort = 0
 	if err := ValidateHTTP([]HTTPService{h}); err == nil {
 		t.Fatal("accepted invalid port")

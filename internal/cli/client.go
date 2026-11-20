@@ -63,10 +63,11 @@ type target struct {
 	SSH             sshx.Options
 	Reconnect       reconnect.Policies
 	Lease           string
+	HTTP            httpPreferences
 }
 
 func defaultPreferences() preferences {
-	return preferences{SchemaVersion: 1, HTTP: httpPreferences{Port: 17890}, Servers: map[string]server{}, Reconnect: reconnect.Defaults(), SSH: sshx.Defaults()}
+	return preferences{SchemaVersion: 1, HTTP: httpPreferences{Port: config.DefaultWebHTTPPort, DomainSuffix: "tdev.localhost"}, Servers: map[string]server{}, Reconnect: reconnect.Defaults(), SSH: sshx.Defaults()}
 }
 func (a *app) prefs() (preferences, error) {
 	state, err := a.readClientState()
@@ -76,6 +77,12 @@ func (a *app) prefs() (preferences, error) {
 	p := state.prefs
 	if p.HTTP.Port < 1 || p.HTTP.Port > 65535 {
 		return p, config.Invalid("client.http.port must be between 1 and 65535")
+	}
+	if port := p.HTTP.httpsPort(); port < 1 || port > 65535 || port == p.HTTP.Port {
+		return p, config.Invalid("client.http.https_port must be between 1 and 65535 and differ from client.http.port")
+	}
+	if !config.ValidHTTPDomainSuffix(p.HTTP.DomainSuffix) {
+		return p, config.Invalid("client.http.domain_suffix must be a lowercase DNS name without a leading or trailing dot")
 	}
 	if err = p.SSH.Validate(); err != nil {
 		return p, err
@@ -123,7 +130,7 @@ func (a *app) serverTarget(p preferences, n, project string) (target, error) {
 		if err != nil {
 			return target{}, err
 		}
-		return target{Name: "local", Project: project, Local: true, Server: server{Projects: overrides.Servers["local"]}, SSH: p.SSH, Reconnect: p.Reconnect}, nil
+		return target{Name: "local", Project: project, Local: true, Server: server{Projects: overrides.Servers["local"]}, SSH: p.SSH, Reconnect: p.Reconnect, HTTP: p.HTTP}, nil
 	}
 	s, ok := p.Servers[n]
 	if !ok {
@@ -136,7 +143,7 @@ func (a *app) serverTarget(p preferences, n, project string) (target, error) {
 	policies.Terminal = s.Reconnect.Terminal.apply(policies.Terminal)
 	policies.Forward = s.Reconnect.Forward.apply(policies.Forward)
 	policies.HTTP = s.Reconnect.HTTP.apply(policies.HTTP)
-	return target{Server: s, Name: n, Project: project, SSH: p.SSH, Reconnect: policies}, nil
+	return target{Server: s, Name: n, Project: project, SSH: p.SSH, Reconnect: policies, HTTP: p.HTTP}, nil
 }
 func (a *app) resolve(ctx context.Context, arg string, confirm bool) (target, error) {
 	return a.resolveTarget(ctx, arg, confirm, false)
@@ -280,7 +287,7 @@ func exitForCode(code string) int {
 		return 4
 	case "SESSION_NOT_FOUND":
 		return 5
-	case "CONNECTION_FAILED", "RETRIES_EXHAUSTED":
+	case "CONNECTION_FAILED", "RETRIES_EXHAUSTED", sshx.AuthRequired:
 		return 6
 	case "DEPENDENCY_MISSING", "MOUNT_UNVERIFIED":
 		return 7

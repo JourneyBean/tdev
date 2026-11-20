@@ -22,7 +22,7 @@ func (s *supervisor) startWeb(req Request, restoring bool) (State, error) {
 	if err := req.Policy.Validate(); err != nil {
 		return State{}, err
 	}
-	if err := config.ValidateHTTP(req.HTTP); err != nil {
+	if err := config.ValidateHTTPRoutes(req.HTTP); err != nil {
 		return State{}, err
 	}
 	s.mu.Lock()
@@ -43,9 +43,12 @@ func (s *supervisor) startWeb(req Request, restoring bool) (State, error) {
 	s.wg.Add(1)
 	s.mu.Unlock()
 	defer s.wg.Done()
+	if req.WebHTTPSPort == 0 {
+		req.WebHTTPSPort = config.DefaultWebHTTPSPort(req.WebPort)
+	}
 	opts := req.SSH
 	opts.MasterDirectory = s.client.Dir
-	if err := s.web.Start(s.ctx, req.Server, req.Name, identity(req)+"/"+req.ProjectID+fmt.Sprintf("/%d/%s", req.Policy.Attempts, req.Policy.Interval), req.WebPort, req.HTTP, req.Local, req.Alias, opts, req.Policy); err != nil {
+	if err := s.web.Start(s.ctx, req.Server, req.Name, identity(req)+"/"+req.ProjectID+fmt.Sprintf("/%d/%s", req.Policy.Attempts, req.Policy.Interval), req.WebPort, req.WebHTTPSPort, req.HTTP, req.Local, req.Alias, opts, req.Policy, s.sharedTransport(req)); err != nil {
 		return State{}, err
 	}
 	s.mu.Lock()

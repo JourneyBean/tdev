@@ -151,7 +151,8 @@ Web 入口优先使用已登记路由的访问端口，未登记服务使用客�
 ```sh
 tdev ls
 tdev ls --wide                         # 展开资源对应的 CONNECTION、PID
-tdev ls --include-inactive             # 包含未启动配置
+tdev ls --all                          # 包含未启动配置
+tdev ls --all --server dev-host        # 只查看指定服务器的全部工作项
 tdev project ls                       # 查看全部项目定义及映射
 tdev session ls                       # 每行一个项目或 scratch 会话
 tdev forward ls                       # 每行一条已启动 TCP 映射
@@ -162,7 +163,10 @@ tdev forward ls --include-inactive     # 同时显示配置中的 TCP 映射
 `session ls` 展示会话状态、真实 tmux 客户端数和会话名称。
 旧服务器缺少客户端数时显示 `—`。`forward ls` 展示归属、运行状态、完整映射和错误，
 未建立且被显式包含的配置标为 `configured`。`web ls` 的未登记配置标为 `stopped`。
-列表支持 `--server`、`--all` 和 `--json`；`--all` 沿用查询全部服务器的含义。
+列表默认查询本机和全部已配置的远端，支持 `--server` 限定范围和 `--json` 输出。
+`tdev ls --all` 包含未启动配置，也可用原有的 `--include-inactive`。
+本机缺少 tmux 时，`tdev ls` 跳过本地会话，仍列出可用资源；`--all` 也会展示本地项目配置。
+`project ls`、`session ls`、`forward ls` 和 `web ls` 的 `--all` 显式选择全部服务器。
 发现失败保留带时间的缓存，缓存工作项状态显示 `unknown`。
 JSON 的每台服务器 `items` 对应当前列表视图，保留 `projects`、`scratches`、`forwards`、
 `web` 等完整快照兼容原有调用。`--wide` 的 `connections` 补充资源与连接的关联。

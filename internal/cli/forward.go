@@ -15,6 +15,7 @@ import (
 	"tdev/internal/forward"
 	"tdev/internal/protocol"
 	"tdev/internal/reconnect"
+	"tdev/internal/sshx"
 )
 
 type temporaryForward struct {
@@ -130,6 +131,9 @@ func (a *app) forwardCommand() {
 				for _, f := range state.Forwards {
 					if f.Name == name && f.Server == server {
 						count++
+						if f.State == "unauthorized" {
+							return nil, protocol.Fail(sshx.AuthRequired, 6, "forward %s: %s", f.Spec, f.Error)
+						}
 						if f.State == "failed" {
 							return nil, protocol.Fail("CONNECTION_FAILED", 6, "forward %s: %s", f.Spec, f.Error)
 						}
@@ -213,7 +217,7 @@ func (a *app) openForwards(ctx context.Context, t target, fs []config.Forward) (
 		seen := map[string]bool{}
 		for e := range g.Events {
 			_ = enc.Encode(e)
-			if !seen[e.ID] && (e.State == "ready" || e.State == "failed" || e.State == "waiting") {
+			if !seen[e.ID] && (e.State == "ready" || e.State == "failed" || e.State == "waiting" || e.State == "unauthorized") {
 				seen[e.ID] = true
 				initial <- e
 			}

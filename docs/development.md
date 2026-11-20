@@ -1,8 +1,12 @@
 # 开发记录与实现取舍
 
+## SSH 密码认证与连接复用
+
+交互式 setup 和 open 由系统 OpenSSH 完成首次认证，再把已认证的 master 交给本地 daemon。首次安装上传和常规 SCP 通过该 socket 建立 SFTP channel。项目 TCP 和 Web 监听通过同一 master 的 forward/cancel 控制请求管理。daemon 为每代连接提供状态变更信号，后台转发在认证失败时停在 unauthorized，等待前台认证后重建自己的监听。网络故障继续使用既有重连预算。OpenSSH 密码由终端读取，客户端与 daemon 保存连接配置和资源登记。
+
 ## 开发构建版本
 
-当前基础版本为 0.9.0，源码默认值与 Makefile 同步，变更见 [v0.9.0 发布说明](releases/v0.9.0.md)。
+当前基础版本为 0.10.0，源码默认值与 Makefile 同步，变更见 [v0.10.0 发布说明](releases/v0.10.0.md)。
 
 Makefile 保留 VERSION 作为发布基础版本，普通 build/cross 在 make 启动时计算一次 BUILD_VERSION，
 通过现有 ldflags 注入 CLI。开发版本使用 `<基础版本>-git.<12 位提交哈希>[.dirty]`，
@@ -23,7 +27,7 @@ create、edit、setup 和 open 缺失项目时复用目录确认流程。远端 
 
 tmux 停止最后一个会话后，旧版服务退出期间可能成功返回空会话列表，Status 将其识别为 missing；非零退出的传输和权限错误保持原处理。
 
-本地 daemon 通过私有 Unix socket 管理控制连接、后台转发及 SSHFS 启动。API、completion 与交互终端共享控制 master；转发、scp 和 SSHFS 使用独立传输。daemon 生命周期锁、逐目标获取锁及独立代次 socket 协调多进程和重连；首次交互认证在调用终端完成，后台使用 BatchMode。
+本地 daemon 通过私有 Unix socket 管理控制连接、后台转发及 SSHFS 启动。API、completion、交互终端、项目 TCP 转发、Web 隧道和 SCP 共享控制 master。具名临时 TCP 转发与 SSHFS 使用独立传输。daemon 生命周期锁、逐目标获取锁及独立代次 socket 协调多进程和重连。首次交互认证在调用终端完成，后台使用 BatchMode。
 
 默认 open 的附属资源随 shell 退出释放；多个窗口共享使用权，最后一个退出才清理临时资源。显式服务模式 `open --only forward/sshfs` 后台保留。存续请求断开会回收异常退出客户端的使用权；挂载沿用身份核对与安全卸载。daemon restart 恢复后台转发和活跃 open 的使用权；stop 保持停止，start 恢复。Web 代理与隧道独立后台保留，按 HTTP 策略重连。行为、隐私边界及运维细节见 [本地 daemon 与 SSH 连接管理](ssh-connection-reuse.md)。
 
@@ -32,8 +36,6 @@ tmux 停止最后一个会话后，旧版服务退出期间可能成功返回空
 远端升级保留现有 SSH master 和附着进程，后续 API 与重新附着从安装路径执行新程序。断线后先经过能力门禁，再核对原 session ID/generation；协议不兼容时退出并提示安装兼容的本地或远端版本、重新 open。已有本地客户端进程继续运行原代码；其他配置根的 daemon 由各自客户端显式 restart。
 
 已成功建立过的 R 映射在断线重连时，旧远端 SSH 连接可能仍占用监听端口。此时 remote port forwarding failed 按原转发重连预算继续等待；首次创建的端口冲突仍立即失败。恢复过程通过新连接重新绑定，保留其他使用者的监听。
-
-Last verified: 2026-11-17。基础版本：0.9.0。历史集成验收使用开发版版本号，见验收记录。
 
 v0.5.0 汇总本地连接监督、open 功能选择、tmux 标题提醒、升级连接恢复与 ps 快照。源码默认值与 Makefile 统一为 0.5.0，机器协议与配置 schema 保持为 1，新增 ps-v1 能力，沿用现有安装签名公钥。GitHub/GitLab 的完整竞态测试超时统一为 300 秒，覆盖新增的真实签名升级与双向映射恢复用例。
 
@@ -382,9 +384,9 @@ include 来源和默认值省略。项目持有服务目标和域名，临时隧
 关闭该项目连接、隧道，最后一个路由释放代理端口。启动时异步重新读取项目自动策略，
 监听失败和发现错误通过 warning 报告。
 
-代理使用标准库 ReverseProxy，限制回环 IPv4 监听和 *.localhost Host，拒绝 CONNECT
+代理使用标准库 ReverseProxy，限制回环 IPv4 监听，并按注册的 Host 查找路由，拒绝 CONNECT
 和绝对请求目标。Rewrite 保留应用 Host，重建转发头，流式响应立即 flush。
-每条远端路由通过已有 forward.Group 独立持有 OpenSSH master 和动态本地 TCP 监听，
+每条远端路由通过已有 forward.Group 在共享 OpenSSH 控制连接上管理动态本地 TCP 监听，
 复用 HTTP 重连预算及认证错误分类。监听预分配与 SSH 绑定之间的端口竞争通过 SSH
 确认结果报告失败；只有已绑定的隧道进入 ready。隧道不可用和上游连接失败返回 503，
 应用 5xx 原样返回。停止跟踪的上游 TCP 连接使已升级 WebSocket 一并退出。
@@ -420,7 +422,10 @@ warnings，发现恢复后清除临时告警。发现成功后，本轮后续恢
 `ls` 按工作项汇总运行中的项目、scratch 和临时转发组；项目只启用转发、Web 或
 挂载时也进入概览。`project ls` 展示全部定义，`session ls` 每行一个真实 session，
 `forward ls` 每行一条 TCP 映射，`web ls` 每行一条路由。
-`--include-inactive` 控制未启动项，`--all` 保持查询全部服务器的原有含义。
+顶层 `ls --all` 复用 `--include-inactive` 的未启动项视图，可与 `--server` 组合。
+两种视图默认查询本机和全部已配置的远端。资源子命令的 `--all` 继续选择全部服务器。
+顶层概览在本机缺少 tmux 时回退到项目定义，并将本地临时会话视为空列表。
+该条件下查询成功退出，本地 TCP、Web、挂载和远端发现照常处理。
 文本与 JSON items 使用相同渲染数据；JSON 原始发现数组保留完整配置和状态。
 健康状态在展示层统一为 running，协议中的原始 ready 等状态保持兼容。
 
@@ -437,13 +442,11 @@ Web 快照携带路由归属与实际目标，声明变化后仍能展示旧运�
 终端 allocation 增加服务器和 scratch 标识，tmux 会话快照增加实际附着客户端数。
 宽表读取已有 daemon 的 inspect，服务查询保持生命周期操作独立。
 
-## 内置 AI skill 与命令职责（2026-11-17）
+## 内置 AI skill 与命令帮助
 
-内置 tdev skill 按工作项、项目定义、会话、TCP、Web、连接选择查询入口。
-结构化调用读取 items 或 connections，原始快照用于诊断，保留观察机器与目标服务器
-的区分。操作说明补齐 Web 生命周期、复合 open、后台转发与会话停止的边界，
-传输示例使用当前 push/pull；分发继续由已有嵌入与受管理文件校验机制完成。
-命令核对使用实际 CLI 的逐级 help，并补充隐藏的 daemon serve 内部入口。
+Skill 记录客户端路由与目标机器 API 的归属、资源生命周期、JSON 视图与原始快照的区别，
+以及部分成功和项目 revision 对重试的影响。命令发现、参数和默认值由已安装 CLI 的
+逐级 `--help` 提供，按当前版本查询。
 
 ## v0.9.0 升级兼容（2026-11-17）
 
@@ -457,3 +460,34 @@ pane/PID，并恢复已有 TCP 监听和受管理 skill；停止标记在刷新�
 缺失时维持未知；显式 open --only forward 复用已有监听并写入归属，避免按当前配置
 猜测历史项目身份。HTTP 项目涉及旧程序不认识的新字段，回滚配置沿用兼容备份策略。
 稳定版使用 v0.9.0 标签与现有签名 CI 发布，沿用安装信任公钥。
+
+## Web 域名默认后缀
+
+项目声明可保存小写短主机名或完整 `*.localhost` 域名。短名在客户端生成生效域名，
+默认使用 `tdev.localhost`，并读取 `client.http.domain_suffix`。项目文件和机器 API
+保留声明值，手动打开、自动启动和列表使用展开后的域名。注册时校验完整域名和冲突，
+daemon 恢复登记保存生效域名，代理仅向已注册的域名转发。
+
+## Web HTTPS 入口与上游
+
+HTTP 和 HTTPS 使用各自的回环 TCP 监听器，共用路由表。HTTPS 在自己的监听器
+上使用标准库 TLS。启动时同时绑定两个端口，任一绑定失败时释放已绑定的端口。
+HTTPS 按 SNI 从已注册路由选取
+自签名证书，证书和私钥保留在内存中。状态保留原有 `url`，另提供 `https_url`。
+`target_scheme` 随路由定义保存，缺省和显式 `http` 视为同一个端点。HTTPS 上游通过
+既有连接和 SSH 隧道建立 TLS，使用项目的目标主机名作为 SNI，跳过证书校验。
+两段连接分别选择协议，沿用 HTTP/1.1 WebSocket upgrade。
+
+HTTP 和 HTTPS 默认使用 24880 和 24881。显式客户端配置优先。HTTP 使用 24881
+且 HTTPS 端口缺省时，HTTPS 使用 24880。旧的 daemon 登记缺少 HTTPS 端口时，
+由同一默认规则补齐。
+
+## Web 配置向导
+
+`web setup` 复用终端输入、确认和服务器选择。客户端设置沿用配置写回逻辑，保留
+`client.include` 来源。保存时获取客户端配置锁并重新读取，遇到同一组 Web 设置的
+并发修改时报告配置冲突。项目向导将路由写入项目所在机器，并使用读取时的 revision
+提交，可检测交互期间的并发修改。提交前校验声明及本客户端展开后的域名。
+
+删除操作先展示所选路由，再要求显式确认。确认后用同一 revision 保护写回项目，
+只从项目定义中移除所选项。活动路由沿用 Web 启停命令的生命周期。

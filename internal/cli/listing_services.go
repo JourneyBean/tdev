@@ -82,6 +82,7 @@ func (entry serverListing) mappingRows(server string) ([]listingRow, [6]string) 
 	seen := map[string]bool{}
 	for _, p := range entry.Projects {
 		for _, h := range p.Project.HTTP {
+			h = h.WithDomainSuffix(entry.webDomainSuffix)
 			state, failure := entry.webState(p.Project.Name, h.Name, h.Hostname)
 			seen[p.Project.Name+"/"+h.Name+"/"+h.Hostname] = true
 			if entry.ActiveOnly && !activeState(state) {

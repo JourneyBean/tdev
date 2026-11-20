@@ -69,7 +69,7 @@ func activeState(state string) bool {
 
 func statusPriority(state string) int {
 	switch state {
-	case "failed", "unavailable", "unmanaged":
+	case "failed", "unauthorized", "unavailable", "unmanaged":
 		return 5
 	case "waiting", "incomplete":
 		return 4
@@ -127,7 +127,7 @@ func (entry serverListing) rows(server string) ([]listingRow, [6]string) {
 				}
 			}
 			for _, h := range p.Project.HTTP {
-				s, _ := entry.webState(p.Project.Name, h.Name, h.Hostname)
+				s, _ := entry.webState(p.Project.Name, h.Name, h.WithDomainSuffix(entry.webDomainSuffix).Hostname)
 				active = active || activeState(s)
 				if statusPriority(s) > statusPriority(state) {
 					state = s
@@ -185,7 +185,7 @@ func (entry serverListing) rows(server string) ([]listingRow, [6]string) {
 			if entry.View == "project" {
 				live = nil
 			}
-			hs = append(hs, webMapping(h, entry.WebPort, live, p.Project.Name))
+			hs = append(hs, webMapping(h.WithDomainSuffix(entry.webDomainSuffix), entry.WebPort, live, p.Project.Name))
 		}
 		if entry.ActiveOnly {
 			fs = []string{}

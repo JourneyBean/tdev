@@ -64,13 +64,13 @@ func (a *app) webAutostartProjects(ctx context.Context, server string) ([]daemon
 		services := []config.HTTPService{}
 		for _, h := range p.HTTP {
 			if h.AutoStart() {
-				services = append(services, h)
+				services = append(services, h.WithDomainSuffix(t.HTTP.DomainSuffix))
 			}
 		}
 		if len(services) == 0 {
 			continue
 		}
-		requests = append(requests, daemon.Request{Op: "web", Automatic: true, ProjectID: p.ID, Server: server, Name: p.Name, Alias: t.Server.SSHAlias, SSH: t.SSH, Local: t.Local, Policy: t.Reconnect.HTTP, HTTP: services, WebPort: prefs.HTTP.Port})
+		requests = append(requests, daemon.Request{Op: "web", Automatic: true, ProjectID: p.ID, Server: server, Name: p.Name, Alias: t.Server.SSHAlias, SSH: t.SSH, Local: t.Local, Policy: t.Reconnect.HTTP, HTTP: services, WebPort: t.HTTP.Port, WebHTTPSPort: t.HTTP.httpsPort()})
 	}
 	return requests, nil
 }

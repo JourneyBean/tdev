@@ -24,24 +24,26 @@ import (
 const Protocol = 1
 
 type Request struct {
-	Resources  []ResourceRef `json:",omitempty"`
-	Automatic  bool          `json:",omitempty"`
-	ProjectID  string        `json:",omitempty"`
-	HTTP       []config.HTTPService
-	WebPort    int
-	Name       string `json:",omitempty"`
-	Server     string `json:",omitempty"`
-	Op         string
-	Alias      string
-	SSH        sshx.Options
-	Socket     string
-	Forwards   []config.Forward
-	Local      bool
-	Policy     reconnect.Policy
-	Preserve   bool
-	Payload    json.RawMessage
-	Owner      string
-	Allocation *Allocation `json:",omitempty"`
+	Resources    []ResourceRef `json:",omitempty"`
+	SharedSSH    bool          `json:",omitempty"`
+	Automatic    bool          `json:",omitempty"`
+	ProjectID    string        `json:",omitempty"`
+	HTTP         []config.HTTPService
+	WebPort      int
+	WebHTTPSPort int
+	Name         string `json:",omitempty"`
+	Server       string `json:",omitempty"`
+	Op           string
+	Alias        string
+	SSH          sshx.Options
+	Socket       string
+	Forwards     []config.Forward
+	Local        bool
+	Policy       reconnect.Policy
+	Preserve     bool
+	Payload      json.RawMessage
+	Owner        string
+	Allocation   *Allocation `json:",omitempty"`
 }
 
 type MountState struct {
@@ -52,6 +54,8 @@ type MountState struct {
 
 type State struct {
 	Mounts            []MountState     `json:"mounts,omitempty"`
+	WebSeparatePorts  bool             `json:"web_separate_ports,omitempty"`
+	WebTLSSupported   bool             `json:"web_tls_supported,omitempty"`
 	WebSupported      bool             `json:"web_supported,omitempty"`
 	Web               []webproxy.State `json:"web,omitempty"`
 	TemporaryForwards bool             `json:"temporary_forwards,omitempty"`

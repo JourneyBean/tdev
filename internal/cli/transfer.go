@@ -155,7 +155,16 @@ func (a *app) scp(ctx context.Context, t target, source, destination string) err
 			}
 		}
 	}
-	args := append([]string{"-s", "-q", "-B"}, t.SSH.Args(true)...)
+	var args []string
+	if a.useDaemon {
+		transport, err := a.controlTransport(ctx, t)
+		if err != nil {
+			return err
+		}
+		args = transport.SCPArgs()
+	} else {
+		args = append([]string{"-s", "-q", "-B"}, t.SSH.Args(true)...)
+	}
 	args = append(args, "--", source, destination)
 	cmd := sshx.Command(ctx, "scp", args...)
 	var stderr sshx.Buffer

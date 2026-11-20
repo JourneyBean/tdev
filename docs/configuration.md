@@ -240,7 +240,7 @@ client:
     server_alive_count_max: 3
 ```
 
-重连设置的优先级为命令参数、服务器覆盖、client 全局设置和内置默认值。attempts 为初次连接之外的重试次数；0 表示停止重试，always 表示持续重试。HTTP 设置用于 Web 隧道独立重连；代理端口通过 `client.http.port` 配置，默认为 17890。项目 `http` 声明见 [Web 服务转发](web-services.md)。向导省略与内置默认值相同的全局配置。
+重连设置的优先级为命令参数、服务器覆盖、client 全局设置和内置默认值。attempts 为初次连接之外的重试次数；0 表示停止重试，always 表示持续重试。HTTP 设置用于 Web 隧道独立重连；HTTP 和 HTTPS 代理端口分别通过 `client.http.port` 和 `client.http.https_port` 配置，默认为 24880 和 24881。短主机名的后缀通过 `client.http.domain_suffix` 配置，默认为 `tdev.localhost`。项目 `http` 声明见 [Web 服务转发](web-services.md)。向导省略与内置默认值相同的全局配置。
 
 ## 旧客户端配置迁移
 

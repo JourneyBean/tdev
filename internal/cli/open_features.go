@@ -34,6 +34,7 @@ func completeOpenFeatures(c *cobra.Command, _ []string, prefix string) ([]string
 func (a *app) restoreOpenServices(t target, p config.Project, f openFeatures) func(context.Context, string) error {
 	return func(ctx context.Context, owner string) error {
 		t.Lease = owner
+		t.Batch = true
 		if f.sshfs && !t.Local {
 			prefs, err := a.prefs()
 			if err != nil {
@@ -107,7 +108,7 @@ func (a *app) daemonForwards(ctx context.Context, t target, fs []config.Forward)
 	for _, f := range fs {
 		refs = append(refs, daemon.ResourceRef{Server: t.Name, Name: t.Project, Kind: "forward", Detail: f.ID})
 	}
-	return client.Call(ctx, daemon.Request{Resources: refs, Op: "forward", Alias: t.Server.SSHAlias, SSH: t.SSH, Local: t.Local, Forwards: fs, Policy: t.Reconnect.Forward, Owner: t.Lease})
+	return client.Call(ctx, daemon.Request{Resources: refs, Op: "forward", SharedSSH: true, Alias: t.Server.SSHAlias, SSH: t.SSH, Local: t.Local, Forwards: fs, Policy: t.Reconnect.Forward, Owner: t.Lease})
 }
 
 func (a *app) openServices(ctx context.Context, t target, f openFeatures) (any, error) {

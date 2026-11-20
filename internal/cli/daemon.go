@@ -167,7 +167,7 @@ func (a *app) controlTransport(ctx context.Context, t target) (daemon.Transport,
 	}
 	defer unlock()
 	request := daemon.Request{Op: "acquire", Alias: t.Server.SSHAlias, SSH: t.SSH}
-	interactive := !t.Batch && terminalAvailable(a.in)
+	interactive := !a.json && !t.Batch && terminalAvailable(a.in)
 	if interactive {
 		request.Op = "lookup"
 	}

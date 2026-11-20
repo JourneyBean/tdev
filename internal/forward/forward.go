@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"tdev/internal/config"
+	"tdev/internal/protocol"
 	"tdev/internal/reconnect"
 	"tdev/internal/sshx"
 )
@@ -27,12 +28,49 @@ type Group struct {
 	sockets map[string]string
 }
 
+// Acquire returns the shared master socket and a signal that closes when the
+// connection changes. With an authentication error the signal waits for login.
+type Acquire func(context.Context) (string, <-chan struct{}, error)
+
+type carrier struct {
+	master  *sshx.Master
+	changed <-chan struct{}
+	close   func()
+	err     func() error
+	shared  bool
+}
+
 func Start(ctx context.Context, alias string, opts sshx.Options, defs []config.Forward, policy reconnect.Policy) *Group {
+	return start(ctx, opts, defs, policy, func(ctx context.Context) (carrier, error) {
+		m, err := sshx.Start(ctx, alias, opts, true)
+		if err != nil {
+			return carrier{}, err
+		}
+		return carrier{master: m, changed: m.Closed(), close: m.Close, err: m.Err}, nil
+	})
+}
+
+func StartShared(ctx context.Context, opts sshx.Options, defs []config.Forward, policy reconnect.Policy, acquire Acquire) *Group {
+	return start(ctx, opts, defs, policy, func(ctx context.Context) (carrier, error) {
+		socket, changed, err := acquire(ctx)
+		return carrier{
+			master:  &sshx.Master{Socket: socket},
+			changed: changed,
+			close:   func() {},
+			shared:  true,
+			err: func() error {
+				return protocol.Fail("CONNECTION_FAILED", 6, "Connection closed: SSH master disconnected")
+			},
+		}, err
+	})
+}
+
+func start(ctx context.Context, opts sshx.Options, defs []config.Forward, policy reconnect.Policy, connect func(context.Context) (carrier, error)) *Group {
 	ctx, cancel := context.WithCancel(ctx)
 	g := &Group{cancel: cancel, Events: make(chan Event, len(defs)*4+1), failed: map[string]string{}, sockets: map[string]string{}}
 	for _, f := range defs {
 		g.wg.Add(1)
-		go func(f config.Forward) { defer g.wg.Done(); g.run(ctx, alias, opts, f, policy) }(f)
+		go func() { defer g.wg.Done(); g.run(ctx, opts, f, policy, connect) }()
 	}
 	go func() { g.wg.Wait(); close(g.Events) }()
 	return g
@@ -54,7 +92,7 @@ func (g *Group) emit(ctx context.Context, f config.Forward, state string, err er
 	case <-ctx.Done():
 	}
 }
-func (g *Group) run(ctx context.Context, alias string, opts sshx.Options, f config.Forward, policy reconnect.Policy) {
+func (g *Group) run(ctx context.Context, opts sshx.Options, f config.Forward, policy reconnect.Policy, connect func(context.Context) (carrier, error)) {
 	budget := reconnect.Budget{Policy: policy}
 	established := false
 	for {
@@ -62,7 +100,20 @@ func (g *Group) run(ctx context.Context, alias string, opts sshx.Options, f conf
 			return
 		}
 		g.emit(ctx, f, "connecting", nil)
-		m, err := sshx.Start(ctx, alias, opts, true)
+		connection, err := connect(ctx)
+		if err != nil && protocol.Normalize(err).Code == sshx.AuthRequired {
+			g.emit(ctx, f, "unauthorized", err)
+			if connection.changed == nil {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-connection.changed:
+				continue
+			}
+		}
+		m := connection.master
 		started := time.Time{}
 		retryRemoteBind := false
 		if err == nil {
@@ -72,6 +123,15 @@ func (g *Group) run(ctx context.Context, alias string, opts sshx.Options, f conf
 			request, cancel := context.WithTimeout(ctx, opts.ConnectTimeout)
 			err = m.Control(request, "forward", "-"+f.Direction, f.Spec())
 			cancel()
+			// The master can disappear after acquisition and before the listener
+			// request. Preserve real bind errors while retrying a lost transport.
+			if err != nil && connection.shared && ctx.Err() == nil {
+				check, cancel := context.WithTimeout(ctx, time.Second)
+				if m.Control(check, "check") != nil && ctx.Err() == nil {
+					err = connection.err()
+				}
+				cancel()
+			}
 			// After a broken connection the old sshd may still own our remote
 			// listener. Retry its bind within the existing budget. Initial port
 			// conflicts still fail immediately and never replace another listener.
@@ -85,16 +145,16 @@ func (g *Group) run(ctx context.Context, alias string, opts sshx.Options, f conf
 					cancelCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 					_ = m.Control(cancelCtx, "cancel", "-"+f.Direction, f.Spec())
 					cancel()
-					m.Close()
+					connection.close()
 					g.mu.Lock()
 					delete(g.sockets, f.ID)
 					g.mu.Unlock()
 					return
-				case <-m.Closed():
-					err = m.Err()
+				case <-connection.changed:
+					err = connection.err()
 				}
 			}
-			m.Close()
+			connection.close()
 			g.mu.Lock()
 			delete(g.sockets, f.ID)
 			g.mu.Unlock()
@@ -110,9 +170,9 @@ func (g *Group) run(ctx context.Context, alias string, opts sshx.Options, f conf
 			return
 		}
 		g.emit(ctx, f, "waiting", err)
-		if err = budget.Next(ctx); err != nil {
+		if retryErr := budget.Next(ctx); retryErr != nil {
 			if ctx.Err() == nil {
-				g.emit(ctx, f, "failed", err)
+				g.emit(ctx, f, "failed", fmt.Errorf("%w (last attempt: %v)", retryErr, err))
 			}
 			return
 		}

@@ -28,6 +28,7 @@ type connection struct {
 	mu              sync.Mutex
 	request         Request
 	transport       Transport
+	changed         chan struct{}
 	err             error
 	foregroundUntil time.Time
 }
@@ -233,14 +234,12 @@ func (s *supervisor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *supervisor) status() State {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	state := State{Protocol: Protocol, PID: os.Getpid(), Connections: len(s.connections), Forwards: []ForwardState{}}
 	state.BinarySHA256 = s.binarySHA256
 	state.TemporaryForwards = true
 	state.WebSupported = true
-	if s.web != nil {
-		state.Web = s.web.States()
-	}
+	state.WebTLSSupported = true
+	state.WebSeparatePorts = true
 	state.Warnings = append(append([]string(nil), s.warnings...), s.webAutostartWarnings()...)
 	for _, m := range s.mounts {
 		state.Mounts = append(state.Mounts, MountState{Resources: m.request.Resources, Path: m.path, PID: m.pid})
@@ -251,26 +250,48 @@ func (s *supervisor) status() State {
 		snapshot.Resources = f.resourceRefs()
 		state.Forwards = append(state.Forwards, snapshot)
 	}
+	s.mu.Unlock()
+	// Stopping a Web route can wait for a worker acquiring the SSH master.
+	// Read Web state without holding the connection registry lock.
+	if s.web != nil {
+		state.Web = s.web.States()
+	}
 	sort.Slice(state.Forwards, func(i, j int) bool { return state.Forwards[i].Spec < state.Forwards[j].Spec })
 	return state
 }
 
 func (s *supervisor) acquire(req Request) (State, error) {
-	if err := sshRequest(req); err != nil {
+	socket, _, err := s.acquireTransport(s.ctx, req, false)
+	if err != nil {
 		return State{}, err
+	}
+	return State{Protocol: Protocol, Socket: socket}, nil
+}
+
+// Shared forwarding workers wait for interactive authentication through the
+// same connection entry. The signal changes when its master is lost or replaced.
+func (s *supervisor) sharedTransport(req Request) forward.Acquire {
+	return func(ctx context.Context) (string, <-chan struct{}, error) {
+		return s.acquireTransport(ctx, Request{Op: "acquire", Alias: req.Alias, SSH: req.SSH}, true)
+	}
+}
+
+func (s *supervisor) acquireTransport(ctx context.Context, req Request, waitForLogin bool) (string, <-chan struct{}, error) {
+	if err := sshRequest(req); err != nil {
+		return "", nil, err
 	}
 	if req.Op == "adopt" {
 		// Interactive authentication happens in the calling terminal. Only sockets
 		// created in this daemon's private runtime tree may be handed to it.
 		if filepath.Dir(filepath.Dir(req.Socket)) != s.client.Dir || !strings.HasPrefix(filepath.Base(filepath.Dir(req.Socket)), "ssh-") || filepath.Base(req.Socket) != "m" {
-			return State{}, config.Invalid("invalid daemon transport socket")
+			return "", nil, config.Invalid("invalid daemon transport socket")
 		}
 	}
 	key := identity(req)
 	s.mu.Lock()
 	if s.ctx.Err() != nil || s.stopping {
 		s.mu.Unlock()
-		return State{}, protocol.Fail("DAEMON_UNAVAILABLE", 6, "daemon is stopping")
+		return "", nil, protocol.Fail("DAEMON_UNAVAILABLE", 6, "daemon is stopping")
 	}
 	e := s.connections[key]
 	if e == nil {
@@ -279,9 +300,9 @@ func (s *supervisor) acquire(req Request) (State, error) {
 		s.desired[key] = persisted
 		if err := s.save(); err != nil {
 			s.mu.Unlock()
-			return State{}, err
+			return "", nil, err
 		}
-		e = &connection{request: req}
+		e = &connection{request: req, changed: make(chan struct{})}
 		s.connections[key] = e
 		s.wg.Add(1)
 		go s.watch(e)
@@ -290,24 +311,32 @@ func (s *supervisor) acquire(req Request) (State, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if s.ctx.Err() != nil {
-		return State{}, s.ctx.Err()
+		return "", nil, s.ctx.Err()
 	}
 	if req.Op == "adopt" {
 		candidate := Transport{Socket: req.Socket}
 		if err := candidate.Control(s.ctx, "check"); err != nil {
-			return State{}, err
+			return "", nil, err
 		}
-		if e.transport.Socket != "" {
-			e.transport.Close()
+		// A background acquisition may have completed while the user was
+		// authenticating. Preserve its channels and listeners if it is live.
+		if e.transport.Socket != candidate.Socket {
+			if e.transport.Socket != "" && e.transport.Control(s.ctx, "check") == nil {
+				candidate.Close()
+			} else {
+				e.replaceTransport(candidate)
+			}
 		}
-		e.transport = candidate
 		e.err = nil
 		e.foregroundUntil = time.Time{}
 	}
-	if err := s.ensure(e); err != nil {
-		return State{}, err
+	if waitForLogin && e.err != nil && protocol.Normalize(e.err).Code == sshx.AuthRequired {
+		return "", e.changed, e.err
 	}
-	return State{Protocol: Protocol, Socket: e.transport.Socket}, nil
+	if err := s.ensure(ctx, e); err != nil {
+		return "", e.changed, err
+	}
+	return e.transport.Socket, e.changed, nil
 }
 
 func (s *supervisor) lookup(req Request) (State, error) {
@@ -346,20 +375,38 @@ func sshRequest(req Request) error {
 	return req.SSH.Validate()
 }
 
-func (s *supervisor) ensure(e *connection) error {
-	if s.ctx.Err() != nil {
-		return s.ctx.Err()
+func (e *connection) replaceTransport(next Transport) {
+	if e.transport.Socket != "" {
+		e.transport.Close()
 	}
-	ctx, cancel := context.WithTimeout(s.ctx, e.request.SSH.ConnectTimeout+5*time.Second)
+	e.transport = next
+	close(e.changed)
+	e.changed = make(chan struct{})
+}
+
+func (s *supervisor) ensure(parent context.Context, e *connection) error {
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(parent, e.request.SSH.ConnectTimeout+5*time.Second)
 	defer cancel()
 	if e.transport.Socket != "" {
 		if err := e.transport.Control(ctx, "check"); err == nil {
 			return nil
 		}
-		e.transport.Close()
-		e.transport = Transport{}
+		if err := parent.Err(); err != nil {
+			return err
+		}
+		e.replaceTransport(Transport{})
 	}
-	e.transport, e.err = StartTransport(ctx, s.client.Dir, e.request.Alias, e.request.SSH, true)
+	next, err := StartTransport(ctx, s.client.Dir, e.request.Alias, e.request.SSH, true)
+	if err != nil && parent.Err() != nil {
+		return parent.Err()
+	}
+	e.err = err
+	if err == nil {
+		e.replaceTransport(next)
+	}
 	return e.err
 }
 
@@ -381,7 +428,7 @@ func (s *supervisor) watch(e *connection) {
 		case <-ticker.C:
 			e.mu.Lock()
 			if time.Now().After(e.foregroundUntil) && (e.err == nil || reconnect.Retryable(e.err)) {
-				_ = s.ensure(e)
+				_ = s.ensure(s.ctx, e)
 			}
 			e.mu.Unlock()
 		}
@@ -453,6 +500,8 @@ func (s *supervisor) runForwards(ctx context.Context, req Request, rollback bool
 			opts.MasterDirectory = s.client.Dir
 			if req.Local {
 				g = forward.StartLocal(s.ctx, []config.Forward{f})
+			} else if req.SharedSSH {
+				g = forward.StartShared(s.ctx, opts, []config.Forward{f}, req.Policy, s.sharedTransport(req))
 			} else {
 				g = forward.Start(s.ctx, req.Alias, opts, []config.Forward{f}, req.Policy)
 			}
@@ -500,7 +549,11 @@ func (s *supervisor) runForwards(ctx context.Context, req Request, rollback bool
 		state := e.state
 		s.mu.Unlock()
 		if state.State != "ready" {
-			return State{}, protocol.Fail("CONNECTION_FAILED", 6, "forward %s: %s %s", state.Spec, state.State, state.Error)
+			code := "CONNECTION_FAILED"
+			if state.State == "unauthorized" {
+				code = sshx.AuthRequired
+			}
+			return State{}, protocol.Fail(code, 6, "forward %s: %s %s", state.Spec, state.State, state.Error)
 		}
 	}
 	return s.status(), nil

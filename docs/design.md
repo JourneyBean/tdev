@@ -27,7 +27,7 @@ tdev 是通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量�
 - 反向映射明确监听位置和流量方向，说明多客户端可能争用远端监听。
 - 终端重连次数可设为 0、正整数或 always，间隔可配置；重连期间 Ctrl-C 退出。
 - 远端提供非交互 api 子命令，供客户端经 SSH 调用。
-- 提供 http://demo.localhost:<固定代理端口> 形式的 HTTP 入口，其重连策略与终端独立。
+- 提供形如 http://demo.tdev.localhost:24880 和 https://demo.tdev.localhost:24881 的入口，其重连策略与终端独立。
 
 ### 1.2 用户价值
 
@@ -76,7 +76,7 @@ tdev 是通过 SSH 使用、以项目组织和恢复 tmux 工作环境的轻量�
 
 项目接受完整的 server/project 标识。local/demo 指当前机器，dev/demo 指登记的远端服务器。裸名称先查本机，再按远端名称排序搜索，自动匹配后显示完整目标。发现索引命中的目标不可达时报告该目标的连接错误。缓存未命中时逐台读取指定项目定义，PROJECT_NOT_FOUND 继续查找，其他错误保留；目标解析独立于 tmux 状态。create 的裸名称默认本机，空参数向导先选择位置。
 
-ls 默认查询本机和全部已配置远端，--server 限定范围，--all 与默认行为一致。终端先显示系统临时目录中的私有缓存和 syncing，再并发更新为 synced；会话名称或归属 warning 随项目展示，刷新成功。失败保留缓存和时间；连接失败显示 unreachable，旧 API 显示 upgrade-required，服务器应用错误显示 error。成功空结果清空对应快照。非终端与 JSON 返回一次最终结果；部分失败返回 9，error.details 保留各服务器结果。缓存仅供展示和发现，实际操作读取目标机器最新定义。
+`ls` 默认查询本机和全部已配置远端。`--server` 限定查询范围，可与 `--all` 组合以包含未启动项。终端先显示系统临时目录中的私有缓存和 syncing，再并发更新为 synced；会话名称或归属 warning 随项目展示，刷新成功。失败保留缓存和时间；连接失败显示 unreachable，旧 API 显示 upgrade-required，服务器应用错误显示 error。成功空结果清空对应快照。非终端与 JSON 返回一次最终结果；部分失败返回 9，error.details 保留各服务器结果。缓存仅供展示和发现，实际操作读取目标机器最新定义。
 
 项目名称建议约束为 `[A-Za-z0-9][A-Za-z0-9_-]*`，长度 1–64；禁止斜杠、点路径和控制字符。项目拥有独立稳定 UUID，显示名称可以与内部 session 名分离。新建 tmux session 使用 `tdev-project-<name>`，稳定 UUID 存于 tmux 标记。状态查询按 UUID 查找，包括旧版或手工改名的会话；名称差异显示 warning。普通会话使用项目逻辑名称时与项目独立。`tdev-project-<name>` 被无匹配 UUID 的会话占用时显示 unmanaged 和 warning，open 保留该会话并创建独立的 `tdev-project-<UUID>` 托管会话（UUID 去掉连字符）。多个会话具有同一项目 UUID 时，状态查询返回 warning，接管或停止操作需先确认归属。
 
@@ -430,21 +430,22 @@ macOS SSHFS 使用 noappledouble/noapplexattr 等选项，防止项目产生 App
 
 ## 11 HTTP 域名映射
 
-目标：`http://demo.localhost:<固定代理端口>`，可扩展 `api.demo.localhost`。固定代理端口由客户端偏好设置；项目保存域名到远端服务端口的声明，不保存客户端临时隧道端口。
+本机代理在不同端口接收 HTTP 和 HTTPS，HTTPS 使用每个路由的自签名证书。项目保存短主机名或完整 `*.localhost` 域名到服务端口的映射。客户端设置固定代理端口和短主机名的默认后缀，并管理临时隧道端口。
 
 ```yaml
 http:
   - name: web
-    hostname: demo.localhost
+    hostname: demo
+    target_scheme: https
     target_host: localhost
     target_port: 5173
 ```
 
-本地代理监听回环地址，根据 Host 路由到动态分配的本地 SSH 隧道端口，再访问远端服务。需处理 WebSocket、SSE/流式响应、请求取消、Host 校验和同名冲突。不同服务器存在同名项目时，提示冲突或明确使用带服务器名的域名，不能无提示覆盖路由。
+本地代理监听回环地址，根据 Host 路由到动态分配的本地 SSH 隧道端口，再访问远端服务。`target_scheme` 选择 HTTP 或 HTTPS 上游，默认为 HTTP。HTTPS 上游跳过证书校验。需处理 WebSocket、SSE/流式响应、请求取消、Host 校验和同名冲突。不同服务器存在同名项目时，提示冲突或明确使用带服务器名的域名，不能无提示覆盖路由。
 
 第一阶段不要求监听 80/443，不自动修改证书信任或 hosts，不默认改写响应正文。应用可能需要配置 allowed hosts、Origin、外部 base URL 和 OAuth callback，代理不能承诺自动解决所有应用兼容问题。
 
-HTTP 阶段需要本地长驻代理进程，但不会改变“远端无常驻 tdev 服务”的原则。代理由现有本地 daemon 承载，默认端口为 17890，通过 client.http.port 配置。`open --only web` 登记路由，`web ls` 查看映射和状态，`web stop server/project` 移除项目路由和隧道。daemon 启动时从本机和已配置服务器读取项目，按 `http[].autostart` 自动启动 Web 服务；该字段默认为 true，false 服务由 open 手动启动。每次重启采用当前项目策略。具体使用和兼容范围见 [Web 服务转发](web-services.md)。
+HTTP 阶段需要本地长驻代理进程，但不会改变“远端无常驻 tdev 服务”的原则。代理由现有本地 daemon 承载，HTTP 和 HTTPS 默认监听 24880 和 24881，分别通过 client.http.port 和 client.http.https_port 配置。`open --only web` 登记路由，`web ls` 查看映射和状态，`web stop server/project` 移除项目路由和隧道。daemon 启动时从本机和已配置服务器读取项目，按 `http[].autostart` 自动启动 Web 服务；该字段默认为 true，false 服务由 open 手动启动。每次重启采用当前项目策略。具体使用和兼容范围见 [Web 服务转发](web-services.md)。
 
 ## 12 技术选型与取舍
 
@@ -546,4 +547,4 @@ GoReleaser 可负责产物组织和发布；安装器、签名验证、远端部
 
 临时会话使用独立 tmux 归属标记，实际名称为 `tdev-scratch-<name>`；未指定名称时以自动生成的 UUID 作为名称，形成 `tdev-scratch-<UUID>`。临时会话独立于项目定义、启动配置、转发及 save。detach 和传输断线保留运行进程，最后一个窗口退出时结束。重连只进入匹配原 session ID 与 generation 的会话。
 
-`ls` 默认展示已启动的项目、scratch 和临时转发工作项，使用 FORWARD、WEB 列展示完整映射。`project ls` 展示全部项目配置，`session ls` 每行展示一个项目或 scratch 会话及 tmux 客户端数，`forward ls` 每行一条 TCP 映射，`web ls` 每行一条 HTTP 路由。健康状态统一为 running，重连、失败及未知状态独立保留。`--include-inactive` 展示未启动配置，`--all` 继续表示查询所有服务器。`--wide` 展示实际连接 ID 和 PID。`connection ls` 与 `ps` 为同一连接视图，共享 master 只显示一行并枚举使用资源；SERVER 表示进程所在机器。JSON 保留完整发现快照，items 表示当前资源视图，connections 表示归组后的连接。scratch 从 tmux 标记发现，成功刷新后移除已结束会话；离线缓存标为 unknown。机器接口 `api scratch create|list|status|attach|attachment` 使用 scratch-v1 门禁。
+`ls` 默认展示已启动的项目、scratch 和临时转发工作项，使用 FORWARD、WEB 列展示完整映射。`project ls` 展示全部项目配置，`session ls` 每行展示一个项目或 scratch 会话及 tmux 客户端数，`forward ls` 每行一条 TCP 映射，`web ls` 每行一条 HTTP 路由。健康状态统一为 running，重连、失败及未知状态独立保留。顶层 `ls` 的 `--all` 和 `--include-inactive` 均包含未启动配置。资源子命令的 `--all` 选择全部服务器。`--wide` 展示实际连接 ID 和 PID。`connection ls` 与 `ps` 为同一连接视图，共享 master 只显示一行并枚举使用资源；SERVER 表示进程所在机器。JSON 保留完整发现快照，items 表示当前资源视图，connections 表示归组后的连接。scratch 从 tmux 标记发现，成功刷新后移除已结束会话；离线缓存标为 unknown。机器接口 `api scratch create|list|status|attach|attachment` 使用 scratch-v1 门禁。

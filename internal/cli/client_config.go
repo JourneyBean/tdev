@@ -19,7 +19,16 @@ import (
 )
 
 type httpPreferences struct {
-	Port int `yaml:"port"`
+	Port         int    `yaml:"port"`
+	HTTPSPort    *int   `yaml:"https_port,omitempty"`
+	DomainSuffix string `yaml:"domain_suffix"`
+}
+
+func (p httpPreferences) httpsPort() int {
+	if p.HTTPSPort != nil {
+		return *p.HTTPSPort
+	}
+	return config.DefaultWebHTTPSPort(p.Port)
 }
 
 type clientDeclaration struct {

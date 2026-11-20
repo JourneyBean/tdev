@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -26,38 +28,54 @@ func TestWebServiceOnlyCLI(t *testing.T) {
 	_, targetText, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
 	target, _ := strconv.Atoi(targetText)
 	root := t.TempDir()
-	port := freeLocalPort(t)
-	text := fmt.Sprintf("demo:\n  dir: /tmp\n  http:\n    - name: web\n      hostname: demo.localhost\n      target_host: 127.0.0.1\n      target_port: %d\nclient:\n  http:\n    port: %d\n", target, port)
+	port, httpsPort := freeLocalPort(t), freeLocalPort(t)
+	text := fmt.Sprintf("demo:\n  dir: /tmp\n  http:\n    - name: web\n      hostname: demo\n      autostart: false\n      target_host: 127.0.0.1\n      target_port: %d\nclient:\n  http:\n    port: %d\n    https_port: %d\n", target, port, httpsPort)
 	if err := os.WriteFile(filepath.Join(root, "config.yaml"), []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}
 	binary := buildCLI(t, "0.8.0-dev")
+	shown := executeBinary(t, binary, root, "", "", 0, "show", "local/demo")
+	data, err := json.Marshal(shown.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shownProject struct {
+		Definition config.Project
+		Effective  config.Project
+	}
+	if err := json.Unmarshal(data, &shownProject); err != nil {
+		t.Fatal(err)
+	}
+	if len(shownProject.Definition.HTTP) != 1 || shownProject.Definition.HTTP[0].Hostname != "demo" ||
+		len(shownProject.Effective.HTTP) != 1 || shownProject.Effective.HTTP[0].Hostname != "demo.tdev.localhost" {
+		t.Fatalf("unexpected project HTTP configuration: %s", data)
+	}
 	executeBinary(t, binary, root, "", "", 0, "open", "local/demo", "--only", "web")
 	req, _ := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/check", port), nil)
-	req.Host = "demo.localhost"
+	req.Host = "demo.tdev.localhost"
 	res, err := (&http.Client{Timeout: time.Second}).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(res.Body)
 	res.Body.Close()
-	if res.StatusCode != 200 || string(body) != "demo.localhost/check" {
+	if res.StatusCode != 200 || string(body) != "demo.tdev.localhost/check" {
 		t.Fatalf("%d %q", res.StatusCode, body)
 	}
 	state := executeBinary(t, binary, root, "", "", 0, "web", "status")
-	if !strings.Contains(fmt.Sprint(state.Data), "demo.localhost") {
+	if !strings.Contains(fmt.Sprint(state.Data), "demo.tdev.localhost") {
 		t.Fatal(state)
 	}
 	for _, args := range [][]string{{"ls"}, {"session", "ls"}, {"web", "ls"}} {
 		cmdArgs := append([]string{"--config-dir", root}, args...)
 		output, err := exec.Command(binary, cmdArgs...).CombinedOutput()
 		if args[0] == "session" {
-			if err != nil || !strings.Contains(string(output), "CLIENTS") || strings.Contains(string(output), "demo.localhost") {
+			if err != nil || !strings.Contains(string(output), "CLIENTS") || strings.Contains(string(output), "demo.tdev.localhost") {
 				t.Fatalf("session-only listing: %v %s", err, output)
 			}
 			continue
 		}
-		mapping := fmt.Sprintf("demo.localhost:%d -> 127.0.0.1:%d", port, target)
+		mapping := fmt.Sprintf("demo.tdev.localhost:%d -> 127.0.0.1:%d", port, target)
 		if err != nil || !strings.Contains(string(output), mapping) || strings.Contains(string(output), "DIR") {
 			t.Fatalf("%v listing: %v %s", args, err, output)
 		}
@@ -72,11 +90,11 @@ func TestWebServiceOnlyCLI(t *testing.T) {
 	}
 	executeBinary(t, binary, root, "", "", 0, "web", "stop", "local/demo")
 	output, err := exec.Command(binary, "--config-dir", root, "web", "ls", "--include-inactive").CombinedOutput()
-	if err != nil || !strings.Contains(string(output), "stopped") {
+	if err != nil || !strings.Contains(string(output), "stopped") || !strings.Contains(string(output), "demo.tdev.localhost") {
 		t.Fatalf("stopped web ls: %v %s", err, output)
 	}
 	state = executeBinary(t, binary, root, "", "", 0, "web", "status")
-	if strings.Contains(fmt.Sprint(state.Data), "demo.localhost") {
+	if strings.Contains(fmt.Sprint(state.Data), "demo.tdev.localhost") {
 		t.Fatal(state)
 	}
 }
@@ -87,13 +105,13 @@ func TestWebAutostartWithoutOpeningProjects(t *testing.T) {
 	_, targetText, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
 	target, _ := strconv.Atoi(targetText)
 	root := t.TempDir()
-	port := freeLocalPort(t)
+	port, httpsPort := freeLocalPort(t), freeLocalPort(t)
 	configText := func(automatic bool) string {
 		return fmt.Sprintf(`demo:
   dir: /tmp
   http:
     - name: web
-      hostname: demo.localhost
+      hostname: demo
       target_host: 127.0.0.1
       target_port: %d
       autostart: %v
@@ -112,7 +130,9 @@ other:
 client:
   http:
     port: %d
-`, target, automatic, target, target, port)
+    https_port: %d
+    domain_suffix: dev.example.invalid
+`, target, automatic, target, target, port, httpsPort)
 	}
 	if err := os.WriteFile(filepath.Join(root, "config.yaml"), []byte(configText(true)), 0600); err != nil {
 		t.Fatal(err)
@@ -136,7 +156,7 @@ client:
 	}
 	waitRoutes(2)
 	// Both projects start without open; the disabled service remains absent.
-	for _, host := range []string{"demo.localhost", "other.localhost"} {
+	for _, host := range []string{"demo.dev.example.invalid", "other.localhost"} {
 		req, _ := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/", port), nil)
 		req.Host = host
 		res, err := (&http.Client{Timeout: time.Second}).Do(req)
@@ -177,22 +197,26 @@ client:
 
 func TestWebAutostartRemoteDiscoveryAfterOfflineStartup(t *testing.T) {
 	ssh := testssh.Start(t)
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, r.Host) }))
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, r.Host, " ", r.TLS.ServerName)
+	}))
 	defer upstream.Close()
-	_, targetText, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
+	_, targetText, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "https://"))
 	target, _ := strconv.Atoi(targetText)
 	root, remote := t.TempDir(), t.TempDir()
-	port := freeLocalPort(t)
+	port, httpsPort := freeLocalPort(t), freeLocalPort(t)
 	binary := buildCLI(t, "0.8.0-dev")
 	remoteText := fmt.Sprintf(`demo:
   dir: /tmp
   http:
     - name: web
-      hostname: remote.localhost
+      hostname: remote
+      target_scheme: https
       target_host: localhost
       target_port: %d
     - name: manual
       hostname: manual.remote.localhost
+      target_scheme: https
       target_host: localhost
       target_port: %d
       autostart: false
@@ -203,11 +227,13 @@ func TestWebAutostartRemoteDiscoveryAfterOfflineStartup(t *testing.T) {
   http:
     - name: web
       hostname: local.localhost
+      target_scheme: https
       target_host: localhost
       target_port: %d
 client:
   http:
     port: %d
+    https_port: %d
   ssh:
     connect_timeout: 1s
     server_alive_interval: 1s
@@ -220,7 +246,7 @@ client:
       ssh_config: %q
       remote_binary: %q
       remote_config_dir: %q
-`, target, port, ssh.Alias, ssh.Config, binary, remote))
+`, target, port, httpsPort, ssh.Alias, ssh.Config, binary, remote))
 	ssh.Offline(true)
 	executeBinary(t, binary, root, ssh.Config, "", 0, "daemon", "start")
 	client, _ := daemon.New(root)
@@ -253,15 +279,17 @@ client:
 		}
 		return true
 	})
-	req, _ := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/", port), nil)
-	req.Host = "remote.localhost"
-	res, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+	req, _ := http.NewRequest("GET", fmt.Sprintf("https://127.0.0.1:%d/", httpsPort), nil)
+	req.Host = "remote.tdev.localhost"
+	transport := &http.Transport{TLSClientConfig: &tls.Config{ServerName: req.Host, InsecureSkipVerify: true}}
+	defer transport.CloseIdleConnections()
+	res, err := (&http.Client{Timeout: 2 * time.Second, Transport: transport}).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
 	body, _ := io.ReadAll(res.Body)
-	if res.StatusCode != 200 || string(body) != "remote.localhost" {
+	if res.StatusCode != 200 || string(body) != "remote.tdev.localhost localhost" {
 		t.Fatalf("%d %q", res.StatusCode, body)
 	}
 	// Inspect the fixture's remote configuration and private tmux socket directly.

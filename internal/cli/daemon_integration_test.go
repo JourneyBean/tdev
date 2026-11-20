@@ -118,6 +118,7 @@ func TestDaemonOpenLifetimesAndCompletionReuse(t *testing.T) {
 			time.Sleep(30 * time.Millisecond)
 		}
 	}
+	before = s.Accepted.Load()
 	first := terminalCLI(t, binary, root, s.Config, "open", "dev/demo")
 	first.write(t, "printf 'FIRST_READY\\n'\r")
 	first.waitText(t, "FIRST_READY\r\n")
@@ -125,6 +126,9 @@ func TestDaemonOpenLifetimesAndCompletionReuse(t *testing.T) {
 	second.write(t, "printf 'SECOND_READY\\n'\r")
 	second.waitText(t, "SECOND_READY\r\n")
 	check(true)
+	if count := s.Accepted.Load() - before; count > 1 {
+		t.Fatalf("attachments and project forward used %d SSH connections, want at most 1", count)
+	}
 	if err = first.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}

@@ -41,7 +41,7 @@ func TestWebSSHRecoveryAndLifecycle(t *testing.T) {
 	opts.ConnectTimeout = time.Second
 	opts.ServerAliveInterval = time.Second
 	opts.ServerAliveCountMax = 1
-	req := Request{Op: "web", Server: "dev", Name: "demo", Alias: ssh.Alias, SSH: opts, WebPort: freePort(t), Policy: reconnect.Policy{Attempts: -1, Interval: 50 * time.Millisecond}, HTTP: []config.HTTPService{{Name: "web", Hostname: "demo.localhost", TargetHost: "127.0.0.1", TargetPort: target}}}
+	req := Request{Op: "web", Server: "dev", Name: "demo", Alias: ssh.Alias, SSH: opts, WebPort: freePort(t), WebHTTPSPort: freePort(t), Policy: reconnect.Policy{Attempts: -1, Interval: 50 * time.Millisecond}, HTTP: []config.HTTPService{{Name: "web", Hostname: "demo.localhost", TargetHost: "127.0.0.1", TargetPort: target}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
 	if _, err = c.Call(ctx, req); err != nil {

@@ -9,7 +9,7 @@ tdev 用 Go 编写，基于系统 OpenSSH 和 tmux，将本机与远端的开发
 适合经常在多个项目、终端和开发服务器之间切换的人。
 
 - **按项目恢复工作**：保存窗口、分屏布局、目录和启动命令，新建会话时恢复；已有会话直接接着用。
-- **打开项目，也连上服务**：启动项目预设的端口转发，按需挂载文件；已声明的 Web 服务通过 `*.localhost` 访问。
+- **打开项目，也连上服务**：启动项目预设的端口转发，按需挂载文件；已声明的 Web 服务默认可通过 `*.tdev.localhost` 访问。
 - **换台客户端，沿用项目配置**：项目定义保存在项目所在机器，客户端单独保存端口和挂载偏好。
 - **沿用熟悉的工具**：复用现有 SSH 配置和身份，远端只需 tdev、tmux 与兼容 shell。
 - **人和 AI 都能操作**：交互向导和命令补全方便日常使用，JSON 接口与内置 skill 供脚本和 AI agent 调用。
@@ -103,7 +103,7 @@ tdev stop dev/forward-NAME              # 使用列表中的名称停止
 项目的固定转发通过 `edit` 保存，`open` 时启动。只需要服务时，可以使用
 `tdev open dev/demo --only forward`。转发默认监听回环地址。
 
-项目还可以声明 Web 域名，使用 `http://demo.localhost:17890` 访问本机或远端应用。
+运行 `tdev web setup` 配置客户端代理或项目 Web 路由。`hostname: demo` 默认可通过 `http://demo.tdev.localhost:24880` 或 `https://demo.tdev.localhost:24881` 访问，可在客户端修改域名后缀。
 Web 入口独立于终端持续运行，可用 `tdev web ls` 查看、`tdev web stop dev/demo` 停止。
 配置方式与 WebSocket 支持见[Web 服务转发](docs/web-services.md)。
 

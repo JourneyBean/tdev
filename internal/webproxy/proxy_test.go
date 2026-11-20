@@ -3,6 +3,8 @@ package webproxy
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
@@ -27,16 +29,20 @@ func freePort(t *testing.T) int {
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port
 }
-func startLocal(t *testing.T, handler http.Handler) (*Manager, string) {
+func startLocal(t *testing.T, scheme string, handler http.Handler) (*Manager, string) {
 	t.Helper()
-	upstream := httptest.NewServer(handler)
+	start := httptest.NewServer
+	if scheme == "https" {
+		start = httptest.NewTLSServer
+	}
+	upstream := start(handler)
 	t.Cleanup(upstream.Close)
-	_, p, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
+	_, p, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, scheme+"://"))
 	port, _ := strconv.Atoi(p)
 	m := New()
 	t.Cleanup(func() { m.Stop("", "") })
-	proxyPort := freePort(t)
-	if err := m.Start(context.Background(), "local", "demo", "local", proxyPort, []config.HTTPService{{Name: "web", Hostname: "demo.localhost", TargetHost: "127.0.0.1", TargetPort: port}}, true, "", sshx.Options{}, reconnect.Defaults().HTTP); err != nil {
+	proxyPort, httpsPort := freePort(t), freePort(t)
+	if err := m.Start(context.Background(), "local", "demo", "local", proxyPort, httpsPort, []config.HTTPService{{Name: "web", Hostname: "demo.localhost", TargetScheme: scheme, TargetHost: "127.0.0.1", TargetPort: port}}, true, "", sshx.Options{}, reconnect.Defaults().HTTP, nil); err != nil {
 		t.Fatal(err)
 	}
 	return m, fmt.Sprintf("http://127.0.0.1:%d", proxyPort)
@@ -58,7 +64,7 @@ func fetch(t *testing.T, address, host, path string) (int, string) {
 	return res.StatusCode, string(body)
 }
 func TestRoutingAndConflicts(t *testing.T) {
-	m, address := startLocal(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	m, address := startLocal(t, "http", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/error" {
 			w.WriteHeader(502)
 		}
@@ -82,7 +88,7 @@ func TestRoutingAndConflicts(t *testing.T) {
 	originalService := m.routes["demo.localhost"].service
 	added := originalService
 	added.Name, added.Hostname = "api", "api.demo.localhost"
-	if err := m.Start(context.Background(), "local", "demo", "local", m.port, []config.HTTPService{originalService, added}, true, "", sshx.Options{}, reconnect.Defaults().HTTP); err != nil {
+	if err := m.Start(context.Background(), "local", "demo", "local", m.port, m.httpsPort, []config.HTTPService{originalService, added}, true, "", sshx.Options{}, reconnect.Defaults().HTTP, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(m.States()) != 2 {
@@ -90,7 +96,7 @@ func TestRoutingAndConflicts(t *testing.T) {
 	}
 
 	h := config.HTTPService{Name: "web", Hostname: "demo.localhost", TargetHost: "127.0.0.1", TargetPort: 1}
-	if err := m.Start(context.Background(), "other", "demo", "other", m.port, []config.HTTPService{h}, true, "", sshx.Options{}, reconnect.Defaults().HTTP); err == nil {
+	if err := m.Start(context.Background(), "other", "demo", "other", m.port, m.httpsPort, []config.HTTPService{h}, true, "", sshx.Options{}, reconnect.Defaults().HTTP, nil); err == nil {
 		t.Fatal("overwrote conflicting hostname")
 	}
 	if m.States()[1] != original {
@@ -113,7 +119,7 @@ func TestRoutingAndConflicts(t *testing.T) {
 
 func TestStreamingAndCancellation(t *testing.T) {
 	cancelled := make(chan struct{})
-	_, address := startLocal(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	_, address := startLocal(t, "http", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: first\n\n")
 		w.(http.Flusher).Flush()
@@ -142,8 +148,68 @@ func TestStreamingAndCancellation(t *testing.T) {
 	}
 }
 
+func TestBothProtocolsWithHTTPSUpstream(t *testing.T) {
+	m, address := startLocal(t, "https", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "%v %s %s", r.TLS != nil, r.Host, r.Header.Get("X-Forwarded-Proto"))
+	}))
+	state := m.States()[0]
+	if state.URL != fmt.Sprintf("http://demo.localhost:%d", m.port) ||
+		state.HTTPSURL != fmt.Sprintf("https://demo.localhost:%d", m.httpsPort) || m.port == m.httpsPort {
+		t.Fatalf("expected separate HTTP and HTTPS ports: %+v", state)
+	}
+	if code, body := fetch(t, address, state.Hostname, "/"); code != 200 || body != "true demo.localhost http" {
+		t.Fatalf("HTTP to HTTPS: %d %q", code, body)
+	}
+
+	proxyCert, err := x509.ParseCertificate(m.routes[state.Hostname].certificate.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := proxyCert.CheckSignature(proxyCert.SignatureAlgorithm, proxyCert.RawTBSCertificate, proxyCert.Signature); err != nil {
+		t.Fatalf("proxy certificate is not self-signed: %v", err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(proxyCert)
+	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: state.Hostname}}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: time.Second}
+	httpsAddress := fmt.Sprintf("https://127.0.0.1:%d", m.httpsPort)
+	if code, _ := fetch(t, "http"+strings.TrimPrefix(httpsAddress, "https"), state.Hostname, "/"); code != http.StatusBadRequest {
+		t.Fatalf("plaintext request to the TLS port returned %d", code)
+	}
+	req, err := http.NewRequest(http.MethodGet, httpsAddress, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = state.Hostname
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	if err != nil || res.StatusCode != 200 || string(body) != "true demo.localhost https" {
+		t.Fatalf("HTTPS to HTTPS: %d %q %v", res.StatusCode, body, err)
+	}
+}
+
 func TestWebSocketUpgradeAndStopClosesConnection(t *testing.T) {
-	m, address := startLocal(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	for _, tc := range []struct {
+		name, upstream string
+		tls            bool
+	}{
+		{name: "ws to ws", upstream: "http"},
+		{name: "wss to ws", upstream: "http", tls: true},
+		{name: "ws to wss", upstream: "https"},
+		{name: "wss to wss", upstream: "https", tls: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testWebSocket(t, tc.upstream, tc.tls) })
+	}
+}
+
+func testWebSocket(t *testing.T, scheme string, useTLS bool) {
+	t.Helper()
+	m, address := startLocal(t, scheme, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Upgrade") != "websocket" {
 			http.Error(w, "upgrade required", 400)
 			return
@@ -163,11 +229,18 @@ func TestWebSocketUpgradeAndStopClosesConnection(t *testing.T) {
 		_, _ = c.Write([]byte{0x81, 2, frame[6] ^ frame[2], frame[7] ^ frame[3]})
 		_, _ = io.Copy(io.Discard, c)
 	}))
-	c, err := net.DialTimeout("tcp", strings.TrimPrefix(address, "http://"), time.Second)
+	listenerAddress := strings.TrimPrefix(address, "http://")
+	if useTLS {
+		listenerAddress = fmt.Sprintf("127.0.0.1:%d", m.httpsPort)
+	}
+	c, err := net.DialTimeout("tcp", listenerAddress, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	if useTLS {
+		c = tls.Client(c, &tls.Config{ServerName: "demo.localhost", InsecureSkipVerify: true})
+	}
 	_ = c.SetDeadline(time.Now().Add(3 * time.Second))
 	fmt.Fprint(c, "GET / HTTP/1.1\r\nHost: demo.localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
 	b := bufio.NewReader(c)
@@ -187,10 +260,35 @@ func TestWebSocketUpgradeAndStopClosesConnection(t *testing.T) {
 	if len(m.States()) != 0 {
 		t.Fatal("stop retained route")
 	}
-	// The last route releases the fixed listening port.
-	l, err := net.Listen("tcp4", strings.TrimPrefix(address, "http://"))
+	// The last route releases both listening ports.
+	for _, port := range []int{m.port, m.httpsPort} {
+		l, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.Close()
+	}
+}
+
+func TestHTTPSPortConflictReleasesHTTPListener(t *testing.T) {
+	occupied, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.Close()
+	defer occupied.Close()
+	port, httpsPort := freePort(t), occupied.Addr().(*net.TCPAddr).Port
+	m := New()
+	defer m.Stop("", "")
+	services := []config.HTTPService{{Name: "web", Hostname: "demo.localhost", TargetHost: "localhost", TargetPort: 5173}}
+	if err := m.Start(context.Background(), "local", "demo", "local", port, httpsPort, services, true, "", sshx.Options{}, reconnect.Defaults().HTTP, nil); err == nil || !strings.Contains(err.Error(), "listen for HTTPS proxy") {
+		t.Fatalf("expected an HTTPS port conflict, got %v", err)
+	}
+	if len(m.States()) != 0 {
+		t.Fatal("registration partially published a route")
+	}
+	httpListener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("HTTP listener was not released: %v", err)
+	}
+	httpListener.Close()
 }

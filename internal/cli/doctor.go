@@ -92,6 +92,8 @@ func (r doctorReport) print(out io.Writer) error {
 			switch entry.State {
 			case "unreachable":
 				advice = "请检查网络及 SSH 连接配置后重试。"
+			case "unauthorized":
+				advice = "请在终端重新运行 tdev setup 或 tdev open 完成 SSH 认证，也可以配置 SSH 密钥供后台连接使用。"
 			case "upgrade-required":
 				advice = "请检查客户端与服务端版本，并按错误提示升级。"
 			}

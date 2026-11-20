@@ -442,6 +442,8 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			daemonCleanup(t, clientRoot)
+			beforeConnections := s.Accepted.Load()
 			wizard := terminalCLI(t, binary, clientRoot, s.Config, "setup", "--interactive", "--remote-binary", destination, "--remote-config-dir", remoteRoot, "--release-dir", v1, "--public-key", filepath.Join(v1, "release.pub"))
 			wizard.waitText(t, "输入序号")
 			wizard.write(t, "1\r")
@@ -451,6 +453,9 @@ func TestFirstVersionSSHWorkflow(t *testing.T) {
 			wizard.write(t, "y\r")
 			wizard.waitText(t, "已保存连接 fixture")
 			wizard.exit(t, 0)
+			if count := s.Accepted.Load() - beforeConnections; count != 1 {
+				t.Fatalf("setup used %d SSH connections, want 1 including release upload", count)
+			}
 			after, err := os.ReadFile(filepath.Join(remoteRoot, "projects", "demo.yaml"))
 			if err != nil || !bytes.Equal(before, after) {
 				t.Fatal("setup altered existing remote project", err)

@@ -139,19 +139,31 @@ func decodeProjectDefinitions(data []byte) ([]discoveredProject, error) {
 	return projects, nil
 }
 
-func (a *app) discover(ctx context.Context, t target) ([]discoveredProject, error) {
-	data, err := a.call(ctx, t, nil, "project", "list", "--status")
+func (a *app) discover(ctx context.Context, t target, withStatus bool) ([]discoveredProject, error) {
+	args := []string{"project", "list"}
+	if withStatus {
+		args = append(args, "--status")
+	}
+	data, err := a.call(ctx, t, nil, args...)
 	if err != nil {
 		return nil, err
 	}
 	var projects []discoveredProject
-	if err = json.Unmarshal(data, &projects); err != nil {
+	if withStatus {
+		err = json.Unmarshal(data, &projects)
+	} else {
+		projects, err = decodeProjectDefinitions(data)
+	}
+	if err != nil {
 		return nil, err
 	}
 	for i := range projects {
 		remote := projects[i].Project
 		if err = remote.Validate(); err != nil {
 			return nil, err
+		}
+		if !withStatus {
+			projects[i].Session.Status = "missing"
 		}
 		projects[i].RemoteProject = remote
 		projects[i].Project, err = a.effective(t, remote)

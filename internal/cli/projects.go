@@ -77,6 +77,9 @@ func (a *app) projectCommands() {
 			return nil, err
 		}
 		effective, err := a.effective(t, p)
+		if err == nil {
+			effective.HTTP, err = effectiveHTTP(effective.HTTP, t.HTTP.DomainSuffix)
+		}
 		return map[string]any{"target": t.Name + "/" + t.Project, "definition": p, "overrides": t.Server.Projects[p.Name], "effective": effective}, err
 	})
 	edit := a.command(a.root, "edit <project>", "Edit a project using the creation wizard or explicit input", cobra.ExactArgs(1), func(ctx context.Context, c *cobra.Command, args []string) (any, error) {

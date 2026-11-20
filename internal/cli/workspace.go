@@ -205,7 +205,7 @@ func (a *app) workspaceCommands() {
 				return webErr
 			}
 			for _, route := range routes {
-				fmt.Fprintf(a.errOut, "Web: %s (%s)\n", route.URL, route.State)
+				fmt.Fprintf(a.errOut, "Web: %s · %s (%s)\n", route.URL, route.HTTPSURL, route.State)
 			}
 		}
 		if s.Warning != "" {
@@ -273,7 +273,7 @@ func (a *app) workspaceCommands() {
 		if err != nil {
 			return nil, err
 		}
-		projects, err := a.discover(ctx, t)
+		projects, err := a.discover(ctx, t, true)
 		if err != nil {
 			return doctorReport{Client: local, Remote: remote, ProjectError: protocol.Normalize(err)}, nil
 		}

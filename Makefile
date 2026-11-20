@@ -1,5 +1,5 @@
 GO ?= go
-VERSION ?= 0.9.0
+VERSION ?= 0.10.0
 ifneq ($(filter release,$(MAKECMDGOALS)),)
 BUILD_VERSION := $(VERSION)
 else

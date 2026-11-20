@@ -87,7 +87,9 @@ func (s *supervisor) inspect(ctx context.Context) Inspection {
 			row.Status = "idle"
 			if c.err != nil {
 				row.Status = "failed"
-				if reconnect.Retryable(c.err) {
+				if protocol.Normalize(c.err).Code == sshx.AuthRequired {
+					row.Status = "unauthorized"
+				} else if reconnect.Retryable(c.err) {
 					row.Status = "waiting"
 				}
 			}

@@ -318,11 +318,18 @@ func TestHTTPClientIncludeAndWriteback(t *testing.T) {
 	clientConfigFile(t, root, "config.yaml", "client:\n  include: [client-prefs.yaml]\n")
 	clientConfigFile(t, root, "client-prefs.yaml", "http:\n  port: 17891\n")
 	a := &app{store: config.Store{Root: root}}
+	defaults, err := (&app{store: config.Store{Root: t.TempDir()}}).prefs()
+	if err != nil || defaults.HTTP.Port != 24880 || defaults.HTTP.httpsPort() != 24881 {
+		t.Fatalf("default web ports: %+v %v", defaults.HTTP, err)
+	}
 	p, err := a.prefs()
-	if err != nil || p.HTTP.Port != 17891 {
+	if err != nil || p.HTTP.Port != 17891 || p.HTTP.httpsPort() != 24881 || p.HTTP.DomainSuffix != "tdev.localhost" {
 		t.Fatalf("HTTP prefs: %+v %v", p.HTTP, err)
 	}
 	p.HTTP.Port = 17892
+	httpsPort := 18443
+	p.HTTP.HTTPSPort = &httpsPort
+	p.HTTP.DomainSuffix = "dev.example.invalid"
 	old, err := a.readClientState()
 	if err != nil {
 		t.Fatal(err)
@@ -331,17 +338,34 @@ func TestHTTPClientIncludeAndWriteback(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, err = a.prefs()
-	if err != nil || p.HTTP.Port != 17892 {
+	if err != nil || p.HTTP.Port != 17892 || p.HTTP.httpsPort() != 18443 || p.HTTP.DomainSuffix != "dev.example.invalid" {
 		t.Fatalf("HTTP writeback: %+v %v", p.HTTP, err)
 	}
 	b, err := os.ReadFile(filepath.Join(root, "client-prefs.yaml"))
-	if err != nil || !strings.Contains(string(b), "17892") {
+	if err != nil || !strings.Contains(string(b), "17892") || !strings.Contains(string(b), "https_port: 18443") || !strings.Contains(string(b), "domain_suffix: dev.example.invalid") {
 		t.Fatalf("include writeback: %s %v", b, err)
 	}
 	for _, port := range []string{"0", "65536", "-1"} {
 		clientConfigFile(t, root, "client-prefs.yaml", "http:\n  port: "+port+"\n")
 		if _, err = a.prefs(); err == nil {
 			t.Errorf("accepted HTTP port %s", port)
+		}
+	}
+	for _, port := range []string{"0", "-1", "65536", "24880"} {
+		clientConfigFile(t, root, "client-prefs.yaml", "http:\n  https_port: "+port+"\n")
+		if _, err = a.prefs(); err == nil {
+			t.Errorf("accepted invalid or conflicting HTTPS port %s", port)
+		}
+	}
+	clientConfigFile(t, root, "client-prefs.yaml", "http:\n  port: 24881\n")
+	p, err = a.prefs()
+	if err != nil || p.HTTP.Port != 24881 || p.HTTP.httpsPort() != 24880 {
+		t.Fatalf("HTTP port matching default HTTPS port: %+v %v", p.HTTP, err)
+	}
+	for _, suffix := range []string{"''", "https://dev.localhost", "*.localhost", ".localhost", "localhost.", "Dev.localhost", "127.0.0.1"} {
+		clientConfigFile(t, root, "client-prefs.yaml", "http:\n  domain_suffix: "+suffix+"\n")
+		if _, err = a.prefs(); err == nil {
+			t.Errorf("accepted HTTP domain suffix %s", suffix)
 		}
 	}
 }

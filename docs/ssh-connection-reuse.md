@@ -8,12 +8,13 @@
 | --- | --- |
 | API、项目发现、completion、远端 shell 查询 | 同一 SSH 别名及 profile 共享控制 master |
 | open、scratch、sh 的交互终端 | 在控制 master 上打开独立 PTY channel；detach 只关闭本次附着 |
-| 托管 forward | 每条映射使用独立 OpenSSH master；相同配置和映射复用监听 |
+| 项目 TCP 转发 | 通过控制 master 建立监听。相同配置和映射复用监听 |
+| 具名临时 TCP 转发 | 每条映射使用独立 OpenSSH master，以保留转发组的独立监听和停止操作 |
 | SSHFS | daemon 启动独立 SSHFS/SFTP 连接，沿用 SSHFS reconnect |
-| scp | 保留独立数据传输连接 |
-| web | HTTP 域名代理及独立隧道，默认随 daemon 自动发现并启动，终端退出后继续运行 |
+| scp | 在控制 master 上打开 SFTP channel，包括 setup 的首次远端安装 |
+| web | HTTP 域名代理通过控制 master 建立隧道，默认随 daemon 自动发现并启动，终端退出后继续运行 |
 
-转发、文件传输与 SSHFS 的流量独立于控制连接。服务端 MaxSessions 配额仍会限制共享控制连接中的终端与 API 并发。项目定义、revision 和 tmux 操作锁继续由目标机器管理。
+服务端 MaxSessions 配额仍会限制共享 SSH 连接中的终端、SFTP 与 API 并发。 具名临时转发与 SSHFS 的独立连接使用非交互认证。项目定义、revision 和 tmux 操作锁继续由目标机器管理。
 
 ## open 的功能与使用权
 
@@ -40,7 +41,7 @@ tdev open dev/demo --only web
 
 控制连接按 SSH 别名、绝对 profile 路径及 SSH 参数区分，每个目标单独串行化获取。首次交互认证在调用终端执行，然后将 detached master 交给 daemon；completion 和后台重连始终使用 BatchMode。控制 channel 禁止 socket 缺失时退回直接连接，避免隐式创建未经管理的传输。
 
-OpenSSH keepalive 检测断线，daemon 每两秒检查已登记的控制 master，并对可恢复故障重建连接。认证及主机密钥错误保留诊断，后台停止自动尝试；显式操作可再次发起认证。终端保留原有重试预算，并检查原 session ID/generation；业务写操作保持现有结果核实和 revision 语义。
+OpenSSH keepalive 检测断线，daemon 每两秒检查已登记的控制 master，并对可恢复故障重建连接。认证及主机密钥错误保留诊断，后台停止自动尝试。SSH 认证失败在列表与后台隧道中显示为 `unauthorized`，区分于网络连接失败的 `unreachable`。用户可在终端运行 `tdev open` 或 `tdev setup` 重新认证，等待认证的项目 TCP 和 Web 转发会复用恢复后的连接。终端保留原有重试预算，并检查原 session ID/generation；业务写操作保持现有结果核实和 revision 语义。
 
 R 映射断线后，旧远端连接的监听释放可能晚于客户端重连。曾经成功建立的 R 映射遇到远端绑定失败时，按转发重连预算等待恢复；首次创建时的端口冲突直接报错。长时间网络分区下，恢复取决于旧远端连接释放监听及配置的重试预算。
 

@@ -20,7 +20,7 @@ func TestWebAutostartRetriesSourcesIndependently(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(c.Dir) })
 	var online atomic.Bool
 	var attempts atomic.Int32
-	port := freePort(t)
+	port, httpsPort := freePort(t), freePort(t)
 	policy := reconnect.Policy{Attempts: -1, Interval: 20 * time.Millisecond}
 	discovery := func(ctx context.Context, r Request) (any, error) {
 		if r.Op == "web-autostart-sources" {
@@ -33,7 +33,7 @@ func TestWebAutostartRetriesSourcesIndependently(t *testing.T) {
 			}
 		}
 		host := r.Server + ".localhost"
-		return []Request{{Op: "web", Server: r.Server, Name: "demo", Local: true, WebPort: port, Policy: policy, HTTP: []config.HTTPService{{Name: "web", Hostname: host, TargetHost: "127.0.0.1", TargetPort: 5173}}}}, nil
+		return []Request{{Op: "web", Server: r.Server, Name: "demo", Local: true, WebPort: port, WebHTTPSPort: httpsPort, Policy: policy, HTTP: []config.HTTPService{{Name: "web", Hostname: host, TargetHost: "127.0.0.1", TargetPort: 5173}}}}, nil
 	}
 	stop := serveTest(t, c, nil, discovery)
 	wait(t, func() bool {
@@ -69,7 +69,7 @@ func TestWebAutostartStopWhileDiscoveryIsPending(t *testing.T) {
 	t.Cleanup(func() { os.RemoveAll(c.Dir) })
 	entered, release := make(chan struct{}), make(chan struct{})
 	policy := reconnect.Defaults().HTTP
-	port := freePort(t)
+	port, httpsPort := freePort(t), freePort(t)
 	discovery := func(ctx context.Context, r Request) (any, error) {
 		if r.Op == "web-autostart-sources" {
 			return []WebSource{{Server: "local", Policy: policy}}, nil
@@ -82,7 +82,7 @@ func TestWebAutostartStopWhileDiscoveryIsPending(t *testing.T) {
 		}
 		requests := []Request{}
 		for _, name := range []string{"stopped", "sentinel"} {
-			requests = append(requests, Request{Op: "web", Server: "local", Name: name, Local: true, WebPort: port, Policy: policy, HTTP: []config.HTTPService{{Name: "web", Hostname: name + ".localhost", TargetHost: "localhost", TargetPort: 5173}}})
+			requests = append(requests, Request{Op: "web", Server: "local", Name: name, Local: true, WebPort: port, WebHTTPSPort: httpsPort, Policy: policy, HTTP: []config.HTTPService{{Name: "web", Hostname: name + ".localhost", TargetHost: "localhost", TargetPort: 5173}}})
 		}
 		return requests, nil
 	}

@@ -23,6 +23,12 @@ func (t Transport) Args(tty bool, command string) []string {
 	return append([]string{"-o", "ProxyCommand=false"}, args...)
 }
 
+func (t Transport) SCPArgs() []string {
+	// scp -S selects an SSH executable. ControlPath selects the authenticated
+	// master, and ProxyCommand prevents fallback if that socket disappears.
+	return []string{"-s", "-q", "-B", "-F", "/dev/null", "-o", "ControlPath=" + t.Socket, "-o", "ControlMaster=no", "-o", "ProxyCommand=false"}
+}
+
 func (t Transport) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

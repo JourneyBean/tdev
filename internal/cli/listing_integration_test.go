@@ -128,14 +128,16 @@ func TestListProjectsAcrossServers(t *testing.T) {
 	executeBinary(t, binary, root, s.Config, "", 0, "setup", "--name", "empty", "--ssh-alias", s.Alias, "--remote-binary", binary, "--remote-config-dir", emptyRoot)
 	for _, command := range [][]string{{"ls"}, {"session", "ls"}} {
 		for _, tc := range []struct {
-			name string
-			args []string
-			want map[string]int
+			name            string
+			args            []string
+			want            map[string]int
+			includeInactive bool
 		}{
-			{"default_all_servers", nil, map[string]int{"local": 0, "empty": 0, "populated": 1}},
-			{"explicit_all", []string{"--all"}, map[string]int{"local": 0, "empty": 0, "populated": 1}},
-			{"selected_empty", []string{"--server", "empty"}, map[string]int{"empty": 0}},
-			{"selected_populated", []string{"--server", "populated"}, map[string]int{"populated": 1}},
+			{"default_all_servers", nil, map[string]int{"local": 0, "empty": 0, "populated": 1}, false},
+			{"explicit_all", []string{"--all"}, map[string]int{"local": 0, "empty": 0, "populated": 1}, len(command) == 1},
+			{"selected_empty", []string{"--server", "empty"}, map[string]int{"empty": 0}, false},
+			{"selected_populated", []string{"--server", "populated"}, map[string]int{"populated": 1}, false},
+			{"include_inactive", []string{"--include-inactive", "--server", "populated"}, map[string]int{"populated": 1}, true},
 		} {
 			t.Run(strings.Join(command, "_")+"/"+tc.name, func(t *testing.T) {
 				args := append(append([]string{}, command...), tc.args...)
@@ -159,20 +161,29 @@ func TestListProjectsAcrossServers(t *testing.T) {
 					if count > 0 && listed.Projects[0].Project.Name != "demo" {
 						t.Fatalf("unexpected remote project: %v", listed.Projects[0].Project)
 					}
+					if count > 0 {
+						shown := len(listed.Items) == 1 && listed.Items[0]["name"] == "demo" && listed.Items[0]["status"] == "inactive"
+						if shown != tc.includeInactive {
+							t.Fatalf("server %s items: %v, want inactive demo: %v", name, listed.Items, tc.includeInactive)
+						}
+					}
 				}
 			})
 		}
 		executeBinary(t, binary, root, s.Config, "", 2, append(append([]string{}, command...), "--server", "missing")...)
-		executeBinary(t, binary, root, s.Config, "", 2, append(append([]string{}, command...), "--all", "--server", "empty")...)
 	}
-	output, err := exec.Command(binary, "--config-dir", root, "--ssh-config", s.Config, "ls", "--include-inactive").CombinedOutput()
+	executeBinary(t, binary, root, s.Config, "", 2, "session", "ls", "--all", "--server", "empty")
+	output, err := exec.Command(binary, "--config-dir", root, "--ssh-config", s.Config, "ls", "--all", "--server", "populated").CombinedOutput()
 	if err != nil {
 		t.Fatal(err, string(output))
 	}
-	for _, text := range []string{"SERVER NAME TYPE STATUS FORWARD WEB", "empty — — synced —", "populated demo project inactive"} {
+	for _, text := range []string{"SERVER NAME TYPE STATUS FORWARD WEB", "populated demo project inactive"} {
 		if !strings.Contains(strings.Join(strings.Fields(string(output)), " "), text) {
 			t.Fatalf("human listing missing %q: %s", text, output)
 		}
+	}
+	if strings.Contains(string(output), "empty") || strings.Contains(string(output), "local") {
+		t.Fatalf("human listing included an unselected server: %s", output)
 	}
 	t.Run("unmanaged_sessions_are_warnings", func(t *testing.T) {
 		t.Setenv("TMUX", "")
@@ -251,6 +262,45 @@ func TestListProjectsAcrossServers(t *testing.T) {
 		for _, manager := range []tmux.Manager{local, remote} {
 			if err := exec.Command("tmux", manager.Args("has-session", "-t", "=tdev-project-demo")...).Run(); err != nil {
 				t.Fatal("unmanaged session was changed", err)
+			}
+		}
+	})
+	t.Run("missing_local_tmux", func(t *testing.T) {
+		ssh, err := exec.LookPath("ssh")
+		if err != nil {
+			t.Fatal(err)
+		}
+		bin := t.TempDir()
+		if err := os.Symlink(ssh, filepath.Join(bin, "ssh")); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", bin)
+		executeBinary(t, binary, t.TempDir(), s.Config, "", 0, "ls")
+		for _, all := range []bool{false, true} {
+			args := []string{"ls"}
+			if all {
+				args = append(args, "--all")
+			}
+			response := executeBinary(t, binary, root, s.Config, "", 0, args...)
+			data, _ := json.Marshal(response.Data)
+			var listing projectListing
+			if err := json.Unmarshal(data, &listing); err != nil {
+				t.Fatal(err)
+			}
+			local := listing["local"]
+			if local.State != "synced" || len(local.Projects) != 1 || len(local.Scratches) != 0 {
+				t.Fatalf("unexpected local listing: %+v", local)
+			}
+			if all {
+				if len(local.Items) != 1 || local.Items[0]["name"] != "demo" || local.Items[0]["status"] != "inactive" {
+					t.Fatalf("missing inactive local project: %+v", local.Items)
+				}
+			} else if len(local.Items) != 0 {
+				t.Fatalf("unexpected active local items: %+v", local.Items)
+			}
+			remote := listing["populated"]
+			if remote.State != "synced" || len(remote.Projects) != 2 || remote.Projects[1].Session.Status != "running" {
+				t.Fatalf("expected live remote project: %+v", remote)
 			}
 		}
 	})

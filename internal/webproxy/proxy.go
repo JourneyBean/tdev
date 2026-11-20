@@ -3,6 +3,7 @@ package webproxy
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -30,12 +31,14 @@ type State struct {
 	Name       string `json:"name"`
 	Hostname   string `json:"hostname"`
 	URL        string `json:"url"`
+	HTTPSURL   string `json:"https_url,omitempty"`
 	State      string `json:"state"`
 	Error      string `json:"error,omitempty"`
 }
 
 type route struct {
 	service                   config.HTTPService
+	certificate               *tls.Certificate
 	server, project, identity string
 	mu                        sync.Mutex
 	state, failure            string
@@ -50,23 +53,28 @@ type route struct {
 }
 
 type Manager struct {
-	mu       sync.RWMutex
-	routes   map[string]*route
-	listener net.Listener
-	server   *http.Server
-	port     int
+	mu           sync.RWMutex
+	routes       map[string]*route
+	httpListener net.Listener
+	tlsListener  net.Listener
+	server       *http.Server
+	port         int
+	httpsPort    int
 }
 
 func New() *Manager { return &Manager{routes: map[string]*route{}} }
 
 // Start registers a complete project's routes atomically. Existing registrations
 // must be stopped before changing their definitions or connection preferences.
-func (m *Manager) Start(ctx context.Context, server, project, identity string, port int, services []config.HTTPService, local bool, alias string, opts sshx.Options, policy reconnect.Policy) error {
-	if err := config.ValidateHTTP(services); err != nil {
+func (m *Manager) Start(ctx context.Context, server, project, identity string, port, httpsPort int, services []config.HTTPService, local bool, alias string, opts sshx.Options, policy reconnect.Policy, acquire forward.Acquire) error {
+	if err := config.ValidateHTTPRoutes(services); err != nil {
 		return err
 	}
-	if !config.ValidName(server) || !config.ValidName(project) || port < 1 || port > 65535 {
-		return config.Invalid("invalid web project identity or proxy port")
+	if !config.ValidName(server) || !config.ValidName(project) {
+		return config.Invalid("invalid web project identity")
+	}
+	if port < 1 || port > 65535 || httpsPort < 1 || httpsPort > 65535 || port == httpsPort {
+		return config.Invalid("HTTP and HTTPS proxy ports must be distinct and between 1 and 65535")
 	}
 	if err := policy.Validate(); err != nil {
 		return err
@@ -81,8 +89,8 @@ func (m *Manager) Start(ctx context.Context, server, project, identity string, p
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.listener != nil && m.port != port {
-		return config.Invalid("web proxy already listens on port %d; stop its routes before changing the port", m.port)
+	if m.server != nil && (m.port != port || m.httpsPort != httpsPort) {
+		return config.Invalid("web proxy already listens on HTTP port %d and HTTPS port %d; stop its routes before changing the ports", m.port, m.httpsPort)
 	}
 	for _, h := range services {
 		if r := m.routes[h.Hostname]; r != nil && (r.server != server || r.project != project || r.identity != identity || !r.service.SameRoute(h)) {
@@ -108,20 +116,41 @@ func (m *Manager) Start(ctx context.Context, server, project, identity string, p
 	if len(services) == 0 {
 		return nil
 	}
-	if m.listener == nil {
-		l, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-		if err != nil {
-			return config.Invalid("listen for web proxy: %v", err)
+	certificates := make(map[string]*tls.Certificate)
+	for _, h := range services {
+		if m.routes[h.Hostname] != nil {
+			continue
 		}
-		m.port, m.listener = port, l
-		m.server = &http.Server{Handler: m, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, ErrorLog: log.New(io.Discard, "", 0)}
-		go func(s *http.Server) { _ = s.Serve(l) }(m.server)
+		cert, err := routeCertificate(h.Hostname)
+		if err != nil {
+			return fmt.Errorf("create TLS certificate for %s: %w", h.Hostname, err)
+		}
+		certificates[h.Hostname] = cert
+	}
+	if m.server == nil {
+		httpListener, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err != nil {
+			return config.Invalid("listen for HTTP proxy: %v", err)
+		}
+		httpsListener, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(httpsPort)))
+		if err != nil {
+			_ = httpListener.Close()
+			return config.Invalid("listen for HTTPS proxy: %v", err)
+		}
+		tlsConfig := &tls.Config{GetCertificate: m.certificate, NextProtos: []string{"http/1.1"}}
+		m.port, m.httpsPort = port, httpsPort
+		m.httpListener, m.tlsListener = httpListener, tls.NewListener(httpsListener, tlsConfig)
+		s := &http.Server{Handler: m, TLSConfig: tlsConfig.Clone(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, ErrorLog: log.New(io.Discard, "", 0)}
+		m.server = s
+		for _, listener := range []net.Listener{m.httpListener, m.tlsListener} {
+			go func() { _ = s.Serve(listener) }()
+		}
 	}
 	for _, h := range services {
 		if m.routes[h.Hostname] != nil {
 			continue
 		}
-		r := &route{local: local, service: h, server: server, project: project, identity: identity, state: "ready", address: net.JoinHostPort(h.TargetHost, strconv.Itoa(h.TargetPort)), connections: map[*trackedConn]bool{}, done: make(chan struct{})}
+		r := &route{local: local, service: h, certificate: certificates[h.Hostname], server: server, project: project, identity: identity, state: "ready", address: net.JoinHostPort(h.TargetHost, strconv.Itoa(h.TargetPort)), connections: map[*trackedConn]bool{}, done: make(chan struct{})}
 		if !local {
 			// Reserve an ephemeral address; OpenSSH confirms ownership before this route
 			// becomes ready. A competing bind is reported as a failed route.
@@ -134,16 +163,25 @@ func (m *Manager) Start(ctx context.Context, server, project, identity string, p
 				_ = l.Close()
 				r.address, r.state = net.JoinHostPort("127.0.0.1", strconv.Itoa(p)), "connecting"
 				f := config.Forward{ID: h.Name, Direction: "L", BindAddress: "127.0.0.1", ListenPort: p, TargetHost: h.TargetHost, TargetPort: h.TargetPort}
-				r.group = forward.Start(ctx, alias, opts, []config.Forward{f}, policy)
+				if acquire != nil {
+					r.group = forward.StartShared(ctx, opts, []config.Forward{f}, policy, acquire)
+				} else {
+					r.group = forward.Start(ctx, alias, opts, []config.Forward{f}, policy)
+				}
 				go r.events()
 			}
 		} else {
 			close(r.done)
 		}
-		r.transport = &http.Transport{Proxy: nil, DialContext: r.dial, ForceAttemptHTTP2: false, MaxIdleConnsPerHost: 16, IdleConnTimeout: 60 * time.Second, ResponseHeaderTimeout: 0}
+		r.transport = &http.Transport{DialContext: r.dial, MaxIdleConnsPerHost: 16, IdleConnTimeout: 60 * time.Second, TLSHandshakeTimeout: 10 * time.Second}
+		if h.Scheme() == "https" {
+			// Development upstreams may use independent self-signed certificates.
+			// Use the configured target for SNI even when dialing a local SSH tunnel.
+			r.transport.TLSClientConfig = &tls.Config{ServerName: h.TargetHost, InsecureSkipVerify: true}
+		}
 		r.proxy = &httputil.ReverseProxy{
 			Rewrite: func(p *httputil.ProxyRequest) {
-				p.Out.URL.Scheme, p.Out.URL.Host = "http", r.address
+				p.Out.URL.Scheme, p.Out.URL.Host = h.Scheme(), r.address
 				p.Out.Host = p.In.Host
 				p.SetXForwarded()
 			},
@@ -182,7 +220,7 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	host = strings.ToLower(host)
-	if !config.ValidHTTPHostname(host) || req.URL.IsAbs() || req.Method == "CONNECT" {
+	if req.URL.IsAbs() || req.Method == "CONNECT" {
 		http.Error(w, "invalid Host or request target", http.StatusBadRequest)
 		return
 	}
@@ -190,6 +228,10 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r := m.routes[host]
 	m.mu.RUnlock()
 	if r == nil {
+		if !config.ValidHTTPHostname(host) {
+			http.Error(w, "invalid Host", http.StatusBadRequest)
+			return
+		}
 		http.NotFound(w, req)
 		return
 	}
@@ -209,7 +251,9 @@ func (m *Manager) States() []State {
 	states := []State{}
 	for _, r := range m.routes {
 		r.mu.Lock()
-		states = append(states, State{TargetHost: r.service.TargetHost, TargetPort: r.service.TargetPort, Server: r.server, Project: r.project, Name: r.service.Name, Hostname: r.service.Hostname, URL: fmt.Sprintf("http://%s:%d", r.service.Hostname, m.port), State: r.state, Error: r.failure})
+		httpHost := net.JoinHostPort(r.service.Hostname, strconv.Itoa(m.port))
+		httpsHost := net.JoinHostPort(r.service.Hostname, strconv.Itoa(m.httpsPort))
+		states = append(states, State{TargetHost: r.service.TargetHost, TargetPort: r.service.TargetPort, Server: r.server, Project: r.project, Name: r.service.Name, Hostname: r.service.Hostname, URL: "http://" + httpHost, HTTPSURL: "https://" + httpsHost, State: r.state, Error: r.failure})
 		r.mu.Unlock()
 	}
 	sort.Slice(states, func(i, j int) bool { return states[i].Hostname < states[j].Hostname })
@@ -240,10 +284,11 @@ func (m *Manager) Stop(server, project string) {
 			<-r.done
 		}
 	}
-	if len(m.routes) == 0 && m.listener != nil {
+	if len(m.routes) == 0 && m.server != nil {
 		_ = m.server.Close()
-		_ = m.listener.Close()
-		m.listener = nil
+		_ = m.httpListener.Close()
+		_ = m.tlsListener.Close()
+		m.server, m.httpListener, m.tlsListener = nil, nil, nil
 	}
 }
 

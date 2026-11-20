@@ -58,11 +58,18 @@ func Command(ctx context.Context, name string, args ...string) *exec.Cmd {
 	c.WaitDelay = time.Second
 	return c
 }
+
+const AuthRequired = "SSH_AUTH_REQUIRED"
+
 func Error(err error, stderr string) error {
 	if err == nil {
 		return nil
 	}
-	return protocol.Fail("CONNECTION_FAILED", 6, "OpenSSH: %v: %s", err, strings.TrimSpace(stderr))
+	message := strings.TrimSpace(stderr)
+	if strings.Contains(message, "Permission denied (") || strings.Contains(message, "Too many authentication failures") {
+		return protocol.Fail(AuthRequired, 6, "SSH authentication required or rejected. Connect from a terminal with tdev setup or tdev open, or configure SSH key authentication. OpenSSH: %s", message)
+	}
+	return protocol.Fail("CONNECTION_FAILED", 6, "OpenSSH: %v: %s", err, message)
 }
 
 type Buffer struct {

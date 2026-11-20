@@ -16,6 +16,7 @@ import (
 	"tdev/internal/config"
 	"tdev/internal/daemon"
 	"tdev/internal/protocol"
+	"tdev/internal/sshx"
 	"tdev/internal/tmux"
 	"tdev/internal/webproxy"
 )
@@ -27,9 +28,10 @@ type serverListing struct {
 	Connections []resourceConnection `json:"connections,omitempty"`
 	Mounts      []daemon.MountState  `json:"mounts,omitempty"`
 
-	View    string           `json:"-"`
-	Web     []webproxy.State `json:"web"`
-	WebPort int              `json:"web_port"`
+	View            string           `json:"-"`
+	Web             []webproxy.State `json:"web"`
+	WebPort         int              `json:"web_port"`
+	webDomainSuffix string
 
 	Forwards       []daemon.ForwardState `json:"forwards"`
 	Location       string                `json:"location"`
@@ -47,17 +49,21 @@ func (a *app) sessionListCommand(parent *cobra.Command, name string) {
 		return a.listProjects(ctx, c)
 	})
 	c.Flags().String("type", "", "filter by project, scratch or forward (legacy temporary forwards)")
-	listingFlags(c)
+	listingFlags(c, parent == a.root)
 	if parent.Name() == "session" {
 		c.Short = "List project and scratch sessions and attached client counts"
 		c.Annotations = map[string]string{"listing-view": "session"}
 	}
 }
 
-func listingFlags(c *cobra.Command) {
+func listingFlags(c *cobra.Command, overview bool) {
 	c.Flags().Bool("wide", false, "show connection IDs and PIDs for each resource")
 	c.Flags().Bool("include-inactive", false, "include configured resources that are stopped")
-	c.Flags().Bool("all", false, "query every configured server (the default)")
+	allUsage := "query every configured server (the default)"
+	if overview {
+		allUsage = "include inactive work items in the selected servers"
+	}
+	c.Flags().Bool("all", false, allUsage)
 	c.Flags().String("server", "", "only list this saved server")
 }
 
@@ -69,7 +75,7 @@ func (a *app) serviceListCommand(parent *cobra.Command, view string) {
 	if view == "project" {
 		c.Short = "List configured projects and mappings"
 	}
-	listingFlags(c)
+	listingFlags(c, false)
 }
 
 func orderedServers(p preferences) []string {
@@ -112,7 +118,10 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 	}
 	all, _ := c.Flags().GetBool("all")
 	selected, _ := c.Flags().GetString("server")
-	if all && selected != "" {
+	overview := c.Name() == "ls" && c.Parent() == a.root
+	if overview {
+		includeInactive = includeInactive || all
+	} else if all && selected != "" {
 		return nil, config.Invalid("choose --server or --all")
 	}
 	names := append([]string{"local"}, orderedServers(p)...)
@@ -163,7 +172,8 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 	targets := make([]target, 0, len(names))
 	for _, name := range names {
 		t, _ := a.serverTarget(p, name, "")
-		entry := serverListing{Wide: wide, ActiveOnly: !includeInactive && view != "project", View: view, WebPort: p.HTTP.Port, Web: []webproxy.State{}, Forwards: append([]daemon.ForwardState{}, liveForwards[name]...), Location: "remote", State: "syncing", Projects: []discoveredProject{}, Scratches: []tmux.Scratch{}}
+		t.Batch = true
+		entry := serverListing{Wide: wide, ActiveOnly: !includeInactive && view != "project", View: view, WebPort: p.HTTP.Port, webDomainSuffix: p.HTTP.DomainSuffix, Web: []webproxy.State{}, Forwards: append([]daemon.ForwardState{}, liveForwards[name]...), Location: "remote", State: "syncing", Projects: []discoveredProject{}, Scratches: []tmux.Scratch{}}
 		for _, binding := range bindings {
 			if binding.Resource.Server == name {
 				entry.Connections = append(entry.Connections, binding)
@@ -234,17 +244,28 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 				updates <- response{name: t.Name}
 				return
 			}
-			projects, err := a.discover(ctx, t)
+			allowMissingTmux := overview && t.Local
+			projects, err := a.discover(ctx, t, true)
+			if allowMissingTmux && err != nil && protocol.Normalize(err).Code == "DEPENDENCY_MISSING" {
+				projects, err = a.discover(ctx, t, false)
+			}
 			r := response{name: t.Name, projects: projects, err: err}
 			if err == nil && (view == "" || view == "session") {
 				data, e := a.call(ctx, t, nil, "scratch", "list")
 				if e == nil {
 					e = json.Unmarshal(data, &r.scratches)
 				}
-				if e != nil && protocol.Normalize(e).Code == "PROTOCOL_INCOMPATIBLE" {
-					r.warning = "scratch listing requires a server with scratch-v1; upgrade the server"
-				} else if e != nil {
-					r.err = e
+				if e != nil {
+					switch protocol.Normalize(e).Code {
+					case "PROTOCOL_INCOMPATIBLE":
+						r.warning = "scratch listing requires a server with scratch-v1; upgrade the server"
+					case "DEPENDENCY_MISSING":
+						if !allowMissingTmux {
+							r.err = e
+						}
+					default:
+						r.err = e
+					}
 				}
 			}
 			updates <- r
@@ -259,6 +280,8 @@ func (a *app) refreshProjects(ctx context.Context, c *cobra.Command, display boo
 			switch protocol.Normalize(update.err).Code {
 			case "CONNECTION_FAILED":
 				entry.State = "unreachable"
+			case sshx.AuthRequired:
+				entry.State = "unauthorized"
 			case "PROTOCOL_INCOMPATIBLE":
 				entry.State = "upgrade-required"
 			}
